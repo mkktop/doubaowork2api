@@ -103,17 +103,19 @@ def test_runtime_save_applies_and_survives_restart(tmp_path):
     with TestClient(app) as client:
         login(client)
         saved = client.put("/admin/config", json={
-            "default_model": "seed-lite-7b", "timeout_seconds": 32, "cooldown_seconds": 21,
+            "default_model": "seed-lite-7b", "timeout_seconds": 32, "cooldown_seconds": 21, "account_max_concurrent": 3,
         })
         assert saved.status_code == 200
         assert app.state.settings.default_model == "seed-lite-7b"
         assert app.state.pool.cooldown_seconds == 21
+        assert app.state.pool.account_max_concurrent == 3
         assert client.put("/admin/config", json={"timeout_seconds": -1}).status_code == 400
         assert client.put("/admin/config", json={"default_model": "made-up"}).status_code == 400
         assert client.put("/admin/config", json={"upstream": "https://untrusted.example"}).status_code == 400
     reloaded = create_app(config)
     assert reloaded.state.settings.default_model == "seed-lite-7b"
     assert reloaded.state.settings.request_timeout_seconds == 32
+    assert reloaded.state.pool.account_max_concurrent == 3
 
 
 def test_account_batch_export_import_round_trip(tmp_path):

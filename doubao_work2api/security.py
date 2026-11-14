@@ -29,7 +29,7 @@ _PUBLIC_KEY_FIELDS = (
     "created_at", "last_used_at",
 )
 _KEY_FIELDS = frozenset({"name", "enabled", "models", "accounts", "concurrency_limit"})
-_RUNTIME_FIELDS = frozenset({"default_model", "timeout_seconds", "cooldown_seconds"})
+_RUNTIME_FIELDS = frozenset({"default_model", "timeout_seconds", "cooldown_seconds", "account_max_concurrent"})
 
 
 def _timestamp() -> str:
@@ -94,6 +94,10 @@ def _runtime_patch(document: Any) -> dict[str, Any]:
         value = result["cooldown_seconds"]
         if type(value) is not int or not 0 <= value <= 86400:
             raise ValueError("cooldown_seconds must be an integer between 0 and 86400")
+    if "account_max_concurrent" in result:
+        value = result["account_max_concurrent"]
+        if type(value) is not int or not 0 <= value <= 10:
+            raise ValueError("account_max_concurrent must be an integer between 0 and 10")
     return result
 
 
@@ -140,9 +144,14 @@ class SecurityStore:
                 # Never silently reset credentials or revive deleted keys on bad JSON.
                 try:
                     state = json.loads(self.path.read_text(encoding="utf-8"))
+                    migrated = isinstance(state, dict) and isinstance(state.get("runtime"), dict) and "account_max_concurrent" not in state["runtime"]
+                    if migrated:
+                        state["runtime"]["account_max_concurrent"] = 0
                     self._validate_state(state)
                 except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                     raise ValueError("invalid security settings file") from None
+                if migrated:
+                    self._save(state)
                 self._state = state
             else:
                 state = {
@@ -151,6 +160,7 @@ class SecurityStore:
                         "default_model": settings.default_model,
                         "timeout_seconds": settings.request_timeout_seconds,
                         "cooldown_seconds": settings.cooldown_seconds,
+                        "account_max_concurrent": settings.account_max_concurrent,
                     }),
                     "admin_password_hash": _password_hash(settings.admin_password),
                     "keys": [],

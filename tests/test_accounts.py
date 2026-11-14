@@ -8,6 +8,7 @@ import pytest
 
 from doubao_work2api.accounts import AccountPool, parse_account_document
 from doubao_work2api.errors import NoAvailableAccountError
+from doubao_work2api.vault import AccountVault
 
 
 def test_parse_cookie_string_account() -> None:
@@ -151,7 +152,7 @@ async def test_paths_are_collision_safe_and_legacy_paths_stay(tmp_path: Path) ->
     assert pool.load() == len(ids) + 1
     updated = await pool.upsert(document("legacy", remark="new"))
     assert updated.source_path == legacy
-    assert json.loads(legacy.read_text(encoding="utf-8"))["remark"] == "new"
+    assert AccountVault(tmp_path).decode(json.loads(legacy.read_text(encoding="utf-8")))["remark"] == "new"
 
 
 async def test_metadata_enabled_and_errors_persist_without_public_credentials(tmp_path: Path) -> None:
@@ -177,7 +178,7 @@ async def test_metadata_enabled_and_errors_persist_without_public_credentials(tm
     await pool.clear_cooldown("one")
     assert account.error_code == account.last_error == ""
     assert account.last_error_at == 0
-    assert json.loads(account.source_path.read_text(encoding="utf-8"))["last_error_at"] == 0
+    assert AccountVault(tmp_path).decode(json.loads(account.source_path.read_text(encoding="utf-8")))["last_error_at"] == 0
 
 
 async def test_set_enabled_preserves_auth_error_fields(tmp_path: Path) -> None:
@@ -185,7 +186,7 @@ async def test_set_enabled_preserves_auth_error_fields(tmp_path: Path) -> None:
     account = await pool.upsert(document())
     account.last_error, account.error_code, account.last_error_at = "expired", "401", 123.0
     await pool.set_enabled("one", False)
-    saved = json.loads(account.source_path.read_text(encoding="utf-8"))
+    saved = AccountVault(tmp_path).decode(json.loads(account.source_path.read_text(encoding="utf-8")))
     assert saved["last_error"] == "expired"
     assert saved["error_code"] == "401"
     assert saved["last_error_at"] == 123.0
@@ -233,7 +234,7 @@ async def test_delete_validates_all_ids_and_busy_before_removing_any(tmp_path: P
             await pool.delete_many(["one"])
     assert await pool.delete_many(["two", "one", "two"]) == ["two", "one"]
     assert pool.accounts == []
-    assert not list(tmp_path.iterdir())
+    assert not list(tmp_path.glob('*.json'))
     assert await pool.delete_many([]) == []
     assert AccountPool(tmp_path).load() == 0
 
@@ -256,7 +257,7 @@ async def test_delete_rolls_back_files_on_staging_failure(tmp_path: Path, monkey
         await pool.delete_many(["one", "two"])
     assert [account.id for account in pool.accounts] == ["one", "two"]
     assert one.source_path.exists() and two.source_path.exists()
-    assert len(list(tmp_path.iterdir())) == 2
+    assert len(list(tmp_path.glob('*.json'))) == 2
 
 
 @pytest.mark.parametrize("operation", ["insert", "upsert", "metadata", "enabled", "cooldown", "clear", "success"])
@@ -295,11 +296,11 @@ async def test_failed_atomic_replace_preserves_memory_and_disk(
             pool.mark_success(account)
     assert account.to_document() == before
     assert account.source_path.read_bytes() == disk_before
-    assert len(list(tmp_path.iterdir())) == 1
+    assert len(list(tmp_path.glob('*.json'))) == 1
 
 
 async def test_acquire_filters_and_keeps_round_robin(tmp_path: Path) -> None:
-    pool = AccountPool(tmp_path)
+    pool = AccountPool(tmp_path, account_max_concurrent=1)
     for account_id in ("one", "two", "three"):
         await pool.upsert(document(account_id))
     for allowed in (set(), {"missing"}):

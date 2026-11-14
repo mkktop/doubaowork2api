@@ -39,7 +39,7 @@ def test_health_and_models(tmp_path) -> None:
     assert denied.status_code == 401
     assert allowed.status_code == 200
     model_ids = [item["id"] for item in allowed.json()["data"]]
-    assert model_ids[0] == "deepseek-v4.1-flash"
+    assert model_ids[0] == "person-deepseek-v4-1-flash-261017"
     assert "person-kimi-k3-1-pro-261111" in model_ids
     assert "person-glm-5-3-flash-261111" in model_ids
     assert len(model_ids) == 8
@@ -171,7 +171,8 @@ def test_import_toggle_and_clear_cooldown(tmp_path) -> None:
         saved = next((tmp_path / "accounts").glob("*.json")).read_text(
             encoding="utf-8"
         )
-        assert "secret-cookie" in saved
+        assert "secret-cookie" not in saved
+        assert 'doubaowork-account/aes256gcm/v1' in saved
 
 
 def test_import_accepts_account_arrays(tmp_path) -> None:
@@ -248,7 +249,8 @@ def test_scan_desktop_imports_account_without_exposing_cookie(
     saved = next((tmp_path / "accounts").glob("*.json")).read_text(
         encoding="utf-8"
     )
-    assert "secret-cookie" in saved
+    assert "secret-cookie" not in saved
+    assert 'doubaowork-account/aes256gcm/v1' in saved
 
 
 def test_removed_online_scan_endpoint_is_not_available(tmp_path) -> None:

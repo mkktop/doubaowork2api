@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .catalog import find_model
+from .catalog import request_model
 from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
 from .request_contract import estimate_tokens, get_output_limit, render_contract_instructions
@@ -45,7 +45,7 @@ def estimate_request_tokens(request: ChatCompletionRequest) -> int:
 
 
 def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionRequest:
-    spec = find_model(request.normalized_model)
+    spec = request_model(request)
     window = spec.context_window if spec else None
     estimated = estimate_request_tokens(request)
     output = get_output_limit(request) or 4096

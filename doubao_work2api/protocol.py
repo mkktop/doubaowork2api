@@ -11,7 +11,7 @@ from .catalog import (
     REASONING_EFFORT_BY_LEVEL,
     REASONING_LEVELS,
     ModelSpec,
-    find_model,
+    request_model,
 )
 from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
@@ -33,16 +33,6 @@ class UnsupportedContentError(GatewayError):
     code = "unsupported_content"
 
 
-_UNSUPPORTED_PARAMETERS = (
-    "temperature",
-    "top_p",
-    "frequency_penalty",
-    "presence_penalty",
-    "seed",
-    "logprobs",
-    "top_logprobs",
-    "n",
-)
 _REASONING_INTEGER_RANGE = range(3, 8)
 _MAX_PROMPT_CONTEXT_ITEMS = 100_000
 
@@ -154,7 +144,7 @@ def _validate_content(request: ChatCompletionRequest) -> None:
 
 
 def _resolve_model(request: ChatCompletionRequest) -> ModelSpec | None:
-    return find_model(request.normalized_model)
+    return request_model(request)
 
 
 def resolve_reasoning_effort(request: ChatCompletionRequest) -> int:
@@ -221,18 +211,15 @@ def validate_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
             "model must be a non-empty string.",
             code="invalid_model",
         )
-    spec = find_model(model)
+    spec = request_model(request)
     if spec is None:
         from .errors import UnknownModelError
 
         raise UnknownModelError(model)
 
-    for name in _UNSUPPORTED_PARAMETERS:
-        if _is_explicit(request, name):
-            raise RequestValidationError(
-                f"{name} is not supported by the Doubao Work upstream.",
-                code="unsupported_parameter",
-            )
+    candidates = _request_field(request, 'n')
+    if candidates is not None and (type(candidates) is not int or candidates != 1):
+        raise RequestValidationError('Only n=1 is supported; multiple candidates are not implemented.')
 
     _validate_content(request)
     validate_contract(request)
@@ -335,7 +322,7 @@ def upstream_payload(
     images: list[UploadedImage] | None = None,
 ) -> dict[str, Any]:
     request = validate_request(request)
-    spec = find_model(request.normalized_model)
+    spec = request_model(request)
     if spec is None:
         raise RequestValidationError(
             "model must be resolved before building an upstream payload.",
@@ -639,7 +626,7 @@ def _text_block_kind(block: dict[str, Any], reasoning_ids: set[str]) -> str:
     return "reasoning" if block.get("block_id") in reasoning_ids or parent in reasoning_ids else "content"
 
 
-class UpstreamTextParser:
+class _LegacyTextParser:
     """Track explicit block ancestry, never toggle on a container update."""
 
     def __init__(self) -> None:
@@ -763,3 +750,6 @@ def phase_markers(payload: dict[str, Any]) -> list[str]:
             if isinstance(block, dict) and block.get("block_type") == 10040:
                 markers.append("thinking")
     return markers
+
+
+from .upstream_text import UpstreamTextParser

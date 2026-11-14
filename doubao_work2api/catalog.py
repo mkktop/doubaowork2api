@@ -7,6 +7,7 @@ from .errors import UnknownModelError
 
 
 REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_MODEL_ID = "person-deepseek-v4-1-flash-261017"
 REASONING_EFFORT_BY_LEVEL: dict[str, int] = {
     "low": 3,
     "medium": 4,
@@ -55,7 +56,7 @@ class ModelSpec:
 # 公开别名不会静默回退到其他模型。
 MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
-        id="deepseek-v4.1-flash",
+        id=DEFAULT_MODEL_ID,
         name="DeepSeek V4.1 Flash",
         upstream_key="person-deepseek-v4-1-flash-261017",
         price="0.01x",
@@ -70,12 +71,13 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         id="seed-lite-7b",
         name="豆包 2.1 Lite",
         upstream_key="seed-lite-7b",
-        price="免费",
+        price="0.01x",
         description="轻量快速模型。",
         context_window=256_000,
         reasoning_levels=("low", "medium", "high"),
         default_reasoning_effort="high",
         memory_profile="256k",
+        image_input=True,
     ),
     ModelSpec(
         id="person-kimi-k3-1-pro-261111",
@@ -87,6 +89,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=REASONING_LEVELS,
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="person-kimi-k3-1-pro-highspeed-261111",
@@ -98,6 +101,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=REASONING_LEVELS,
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="person-kimi-k3-261111",
@@ -109,6 +113,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=REASONING_LEVELS,
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="person-glm-5-3-261111",
@@ -120,6 +125,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=("low", "high", "max"),
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="person-glm-5-3-flash-261111",
@@ -131,6 +137,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=("low", "high", "max"),
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="person-deepseek-v4-pro-ga-260813",
@@ -142,14 +149,15 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=REASONING_LEVELS,
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
 )
 
 _BY_ID = {item.id: item for item in MODEL_CATALOG}
 _ALIASES = {
-    "deepseek-v4-1-flash": "deepseek-v4.1-flash",
-    "deepseek-v4.1-flash-261017": "deepseek-v4.1-flash",
-    "person-deepseek-v4-1-flash-261017": "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash": DEFAULT_MODEL_ID,
+    "deepseek-v4-1-flash": DEFAULT_MODEL_ID,
+    "deepseek-v4.1-flash-261017": DEFAULT_MODEL_ID,
     "kimi-k3.1-pro": "person-kimi-k3-1-pro-261111",
     "kimi-k3.1-pro-highspeed": "person-kimi-k3-1-pro-highspeed-261111",
     "kimi-k3": "person-kimi-k3-261111",
@@ -166,6 +174,11 @@ def normalize_model(model: str) -> str:
 
 def find_model(model: str) -> ModelSpec | None:
     return _BY_ID.get(normalize_model(model))
+
+
+def request_model(request) -> ModelSpec | None:
+    bound = getattr(request, '_model_spec', None)
+    return bound if isinstance(bound, ModelSpec) else find_model(request.normalized_model)
 
 
 def resolve_upstream_key(model: str) -> str:

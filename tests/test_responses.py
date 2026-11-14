@@ -86,6 +86,27 @@ async def collect(
     return events, parsed
 
 
+@pytest.mark.parametrize('summary', [
+    {'summary':'auto'}, {'summary':'concise'}, {'summary':'detailed'},
+    {'generate_summary':'auto'}, {'generate_summary':'concise'},
+    {'summary':'auto','generate_summary':'detailed'},
+    {'summary':None,'generate_summary':None},
+])
+@pytest.mark.parametrize('effort', [None, 'low', 'high'])
+def test_reasoning_summary_hints_are_ignored_without_changing_effort(summary, effort):
+    reasoning = {**summary, **({'effort':effort} if effort is not None else {})}
+    request = responses_to_chat({'input':'hello','reasoning':reasoning}, 'deepseek-v4.1-flash')
+    assert request.reasoning_effort == effort
+    fields = request.model_dump()
+    assert 'summary' not in fields and 'generate_summary' not in fields
+
+
+def test_ignored_summary_does_not_bypass_effort_validation():
+    with pytest.raises(ResponsesConversionError) as caught:
+        responses_to_chat({'input':'hello','reasoning':{'summary':'auto','effort':'ultra'}}, 'deepseek-v4.1-flash')
+    assert caught.value.code == 'invalid_reasoning_effort'
+
+
 def test_responses_request_maps_official_flat_schema() -> None:
     request = responses_to_chat(
         {
@@ -231,7 +252,7 @@ def test_previous_response_id_without_lookup_is_a_400() -> None:
 def test_unknown_include_and_bad_truncation_are_clear_400s() -> None:
     with pytest.raises(ResponsesConversionError) as include:
         responses_to_chat(
-            {"input": "x", "include": ["message.output_text.logprobs"]},
+            {"input": "x", "include": ["unknown.unimplemented_field"]},
             "deepseek-v4.1-flash",
         )
     assert include.value.status_code == 400

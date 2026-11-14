@@ -20,7 +20,7 @@ from starlette.background import BackgroundTask
 
 from . import __version__
 from .accounts import AccountPool
-from .catalog import MODEL_CATALOG, normalize_model, resolve_upstream_key
+from .catalog import normalize_model
 from .config import Settings
 from .desktop import DesktopScanError, scan_desktop_account
 from .errors import AuthenticationError, GatewayError
@@ -30,7 +30,13 @@ from .security import SecurityStore
 from .service import ChatService
 from .protocol import validate_request
 from .transport import DirectTransport
+from .benefits import BenefitsService
+from .live_catalog import LiveCatalog
+from .qr_login import QRLogin
+from .sse import keepalive
 from .response_store import ResponseStore, response_owner
+from .routing import RoutingPolicy
+from .browser_login import BrowserLogin
 from .responses import ResponsesConversionError, responses_to_chat, chat_to_response, chat_stream_to_responses, response_output_to_messages
 
 logger = logging.getLogger(__name__)
@@ -74,14 +80,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     security = SecurityStore(initial)
     runtime = security.runtime
     settings = replace(
-        initial, default_model=runtime["default_model"],
+        initial, default_model=normalize_model(runtime["default_model"]),
         request_timeout_seconds=runtime["timeout_seconds"],
         cooldown_seconds=runtime["cooldown_seconds"],
+        account_max_concurrent=runtime["account_max_concurrent"],
     )
-    pool = AccountPool(settings.accounts_dir, cooldown_seconds=settings.cooldown_seconds)
+    pool = AccountPool(settings.accounts_dir, cooldown_seconds=settings.cooldown_seconds, account_max_concurrent=settings.account_max_concurrent)
     pool.load()
     transport = DirectTransport(settings)
-    request_log = RequestLog()
+    request_log = RequestLog(path=settings.data_dir / 'requests.sqlite3')
+    catalog = LiveCatalog(settings.data_dir)
+    benefits = BenefitsService(pool, transport, settings.data_dir)
+    qr_login = QRLogin(pool)
+    browser_login = BrowserLogin(pool)
     response_store = ResponseStore(settings.data_dir)
     service = ChatService(
         pool, transport, model_key=settings.model_key, app_id=settings.app_id,
@@ -89,14 +100,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         default_model=settings.default_model, request_log=request_log,
     )
     key_active: dict[str, int] = {}
+    service.catalog = catalog
+    service.routing = RoutingPolicy(settings.data_dir)
     key_lock = asyncio.Lock()
     config_lock = asyncio.Lock()
     login_failures: dict[str, list[float]] = {}
+    account_tests_active: set[str] = set()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        yield
-        await transport.close()
+        benefits.start()
+        try:
+            yield
+        finally:
+            await benefits.close()
+            await qr_login.close()
+            await browser_login.close()
+            await transport.close()
 
     app = FastAPI(title="doubaowork2api", version=__version__, lifespan=lifespan)
     app.state.settings = settings
@@ -104,6 +124,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.pool = pool
     app.state.service = service
     app.state.request_log = request_log
+    app.state.catalog = catalog
+    app.state.benefits = benefits
+    app.state.qr_login = qr_login
+    app.state.browser_login = browser_login
     app.state.response_store = response_store
     app.mount("/ui-assets", StaticFiles(directory=WEB_DIR), name="ui-assets")
 
@@ -184,13 +208,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 default_reasoning_effort=item.default_reasoning_effort,
                 image_input=item.image_input,
             )
-            for item in MODEL_CATALOG if not allowed or item.id in allowed
+            for item in catalog.models if not allowed or item.id in allowed
         ])
 
     def prepare_chat(payload: ChatCompletionRequest, key: dict) -> ChatCompletionRequest:
         if "model" not in payload.model_fields_set:
             payload = payload.model_copy(update={"model": app.state.settings.default_model})
-        resolve_upstream_key(payload.normalized_model)
+        catalog.bind(payload)
         allowed_models = {normalize_model(model) for model in key["models"]}
         if allowed_models and payload.normalized_model not in allowed_models:
             raise HTTPException(403, "此 API Key 无权调用该模型。")
@@ -220,7 +244,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return release
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(payload: ChatCompletionRequest, key: dict = Depends(require_api)):
+    async def chat_completions(payload: ChatCompletionRequest, request: Request, key: dict = Depends(require_api)):
+        payload._conversation_hint = request.headers.get('x-conversation-id', '')[:512]
         payload = prepare_chat(payload, key)
         release = await reserve_key(key)
         options = {
@@ -239,7 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 finally:
                     await release()
             return StreamingResponse(
-                chunks(), media_type="text/event-stream", background=BackgroundTask(release),
+                keepalive(chunks()), media_type="text/event-stream", background=BackgroundTask(release),
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         try:
@@ -326,7 +351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             yield f"event: {kind}\ndata: {json.dumps(record, ensure_ascii=False, separators=(',', ':'))}\n\n"
             finally:
                 await release()
-        return StreamingResponse(response_events(), media_type="text/event-stream", background=BackgroundTask(release), headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(keepalive(response_events()), media_type="text/event-stream", background=BackgroundTask(release), headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/v1/responses/{response_id}")
     async def retrieve_response(response_id: str, key: dict = Depends(require_api)):
@@ -379,8 +404,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             messages=chat.messages + [ChatMessage(role="user", content=summary_instruction)],
             max_completion_tokens=8192,
         )
-        from .catalog import find_model
-        spec = find_model(chat.normalized_model)
+        from .catalog import request_model
+        spec = request_model(chat)
         if spec and "low" in spec.reasoning_levels:
             summary_request = summary_request.model_copy(update={"reasoning_effort": "low"})
         summary_request = prepare_chat(summary_request, key)
@@ -441,14 +466,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def config_document():
         current = app.state.settings
         return {
-            "version": __version__, "models": [item.public_dict() for item in MODEL_CATALOG],
+            "version": __version__, "models": [item.public_dict() for item in catalog.models],
+            'catalog': catalog.status(),
             "default_model": current.default_model,
             "api_key_configured": bool(security.list_keys()),
             "accounts_dir": str(current.accounts_dir), "upstream": current.upstream_base,
             "timeout_seconds": current.request_timeout_seconds,
             "cooldown_seconds": current.cooldown_seconds,
+            "account_max_concurrent": current.account_max_concurrent,
             "listen": f"{current.host}:{current.port}", "auth": "admin_cookie",
-            "runtime": security.runtime,
+            "runtime": {**security.runtime, "default_model": current.default_model},
         }
 
     @app.get("/admin/config", dependencies=[Depends(require_admin)])
@@ -460,18 +487,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if "default_model" in payload:
             if not isinstance(payload["default_model"], str):
                 raise ValueError("默认模型必须是字符串。")
-            resolve_upstream_key(payload["default_model"])
+            if catalog.find(payload['default_model']) is None:
+                raise ValueError('默认模型不在当前模型清单中。')
             payload["default_model"] = normalize_model(payload["default_model"])
         async with key_lock, config_lock:
             # Active streams finish with their current transport configuration.
-            if key_active or any(account.in_flight for account in pool.accounts):
+            cap_only = set(payload) == {"account_max_concurrent"}
+            if not cap_only and (key_active or any(account.in_flight or account.lock.locked() for account in pool.accounts)):
                 raise HTTPException(409, "有请求正在执行，请在请求结束后保存设置。")
             runtime = security.update_runtime(payload)
-            current = replace(app.state.settings, default_model=runtime["default_model"],
+            current = replace(app.state.settings, default_model=normalize_model(runtime["default_model"]),
                               request_timeout_seconds=runtime["timeout_seconds"],
-                              cooldown_seconds=runtime["cooldown_seconds"])
-            await transport.configure(current)
+                              cooldown_seconds=runtime["cooldown_seconds"],
+                              account_max_concurrent=runtime["account_max_concurrent"])
+            if not cap_only:
+                await transport.configure(current)
             pool.cooldown_seconds = current.cooldown_seconds
+            pool.account_max_concurrent = current.account_max_concurrent
             service.default_model = current.default_model
             app.state.settings = current
         return config_document()
@@ -483,7 +515,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for model in payload["models"]:
                 if not isinstance(model, str):
                     raise ValueError("模型列表只能包含模型 ID 字符串。")
-                resolve_upstream_key(model)
+                if catalog.find(model) is None:
+                    raise ValueError('模型不在当前模型目录中。')
             payload["models"] = list(dict.fromkeys(normalize_model(model) for model in payload["models"]))
         if "accounts" in payload:
             if not isinstance(payload["accounts"], list) or any(
@@ -494,7 +527,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/admin/keys", dependencies=[Depends(require_admin)])
     async def keys():
-        return {"data": security.list_keys()}
+        return {"data": [{**key, "models": list(dict.fromkeys(normalize_model(model) for model in key["models"]))} for key in security.list_keys()]}
 
     @app.post("/admin/keys", dependencies=[Depends(require_admin)])
     async def add_key(payload: dict[str, Any]):
@@ -513,11 +546,89 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/admin/accounts", dependencies=[Depends(require_admin)])
     async def admin_accounts():
-        return {"data": pool.snapshot()}
+        cached = benefits.snapshot()['accounts']
+        return {"data": [{**row, 'benefits': cached.get(row['id'], {})} for row in pool.snapshot()]}
+
+    @app.get('/admin/benefits', dependencies=[Depends(require_admin)])
+    async def get_benefits():
+        return benefits.snapshot()
+
+    @app.put('/admin/automation/config', dependencies=[Depends(require_admin)])
+    async def automation_config(payload: dict[str, Any]):
+        return benefits.configure(payload)
+
+    @app.post('/admin/catalog/refresh', dependencies=[Depends(require_admin)])
+    async def refresh_catalog(payload: dict[str, Any] | None = None):
+        account_id = (payload or {}).get('account_id')
+        account = pool.find(account_id) if account_id else next((a for a in pool.accounts if a.available), None)
+        if account is None:
+            raise ValueError('请选择一个可用账号刷新目录。')
+        async with account.lock:
+            return await catalog.refresh(transport, account)
+
+    @app.post('/admin/accounts/qr', dependencies=[Depends(require_admin)])
+    async def start_qr(request: Request):
+        return await qr_login.start(request.cookies.get(SESSION_COOKIE, ''))
+
+    @app.post('/admin/accounts/qr/{session_id}/poll', dependencies=[Depends(require_admin)])
+    async def poll_qr(session_id: str, request: Request):
+        return await qr_login.poll(session_id, request.cookies.get(SESSION_COOKIE, ''))
+
+    @app.delete('/admin/accounts/qr/{session_id}', dependencies=[Depends(require_admin)])
+    async def cancel_qr(session_id: str, request: Request):
+        await qr_login.cancel(session_id, request.cookies.get(SESSION_COOKIE, ''))
+        return {'ok': True}
+
+    @app.post('/admin/accounts/browser', dependencies=[Depends(require_admin)])
+    async def start_browser(request: Request):
+        return await browser_login.start(request.cookies.get(SESSION_COOKIE,''))
+
+    @app.post('/admin/accounts/browser/{session_id}/finish', dependencies=[Depends(require_admin)])
+    async def finish_browser(session_id: str, request: Request):
+        return await browser_login.finish(session_id,request.cookies.get(SESSION_COOKIE,''))
+
+    @app.delete('/admin/accounts/browser/{session_id}', dependencies=[Depends(require_admin)])
+    async def cancel_browser(session_id: str, request: Request):
+        await browser_login.cancel(session_id,request.cookies.get(SESSION_COOKIE,''))
+        return {'ok':True}
+
+    @app.post('/admin/accounts/{account_id}/quota', dependencies=[Depends(require_admin)])
+    async def account_quota(account_id: str):
+        return await benefits.quota(account_id)
+
+    @app.post('/admin/accounts/{account_id}/checkin', dependencies=[Depends(require_admin)])
+    async def account_checkin(account_id: str):
+        return await benefits.checkin(account_id)
+
+    @app.post('/admin/checkin', dependencies=[Depends(require_admin)])
+    async def batch_checkin(payload: AccountSelection | None = None):
+        ids = payload.ids if payload else [a.id for a in pool.accounts if a.available]
+        for account_id in ids:
+            if pool.find(account_id) is None:
+                raise KeyError(account_id)
+        return {'results': [{'id': account_id, **await benefits.checkin(account_id)} for account_id in dict.fromkeys(ids)]}
 
     @app.get("/admin/logs", dependencies=[Depends(require_admin)])
-    async def admin_logs(limit: int = 100):
-        return {"data": request_log.snapshot(limit)}
+    async def admin_logs(limit: int = 100, offset: int = 0, since: float = 0,
+            until: float | None = None, model: str = '', account_id: str = '', key_id: str = ''):
+        return {"data": request_log.snapshot(limit,offset=offset,since=since,until=until,
+            model=model,account_id=account_id,key_id=key_id)}
+
+    @app.get('/admin/analytics', dependencies=[Depends(require_admin)])
+    async def admin_analytics(days: int = 7):
+        if not 1 <= days <= 30:
+            raise ValueError('统计范围必须为 1～30 天。')
+        return request_log.analytics(days)
+
+    @app.get('/admin/routing', dependencies=[Depends(require_admin)])
+    async def get_routing():
+        return dict(service.routing.config)
+
+    @app.put('/admin/routing', dependencies=[Depends(require_admin)])
+    async def update_routing(payload: dict[str, Any]):
+        result = service.routing.configure(payload)
+        service.native_sessions.entries.clear()
+        return result
 
     @app.post("/admin/accounts/scan-offline", dependencies=[Depends(require_admin)])
     async def scan_offline():
@@ -591,6 +702,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/admin/accounts/{account_id}/clear-cooldown", dependencies=[Depends(require_admin)])
     async def clear_account_cooldown(account_id: str):
         return {"data": (await pool.clear_cooldown(account_id)).public_dict()}
+
+    @app.post("/admin/accounts/{account_id}/test", dependencies=[Depends(require_admin)])
+    async def test_account(account_id: str, payload: dict[str, Any] | None = None):
+        if pool.find(account_id) is None:
+            raise KeyError(account_id)
+        if account_id in account_tests_active:
+            raise HTTPException(429, "此账号正在测试，请等待本次测试结束。")
+        selected_model = (payload or {}).get('model') or app.state.settings.default_model
+        spec = catalog.find(selected_model)
+        if spec is None:
+            raise ValueError('模型不在当前目录中。')
+        request = service.prepare(ChatCompletionRequest(
+            model=selected_model,
+            messages=[ChatMessage(role="user", content="只回复 OK")],
+            max_completion_tokens=64, reasoning_effort='low' if 'low' in spec.reasoning_levels else spec.default_reasoning_effort,
+        ))
+        account_tests_active.add(account_id)
+        started = time.monotonic()
+        try:
+            result = await service.probe(request, account_id=account_id)
+            return {"ok": True, "account_id": account_id, "model": result["model"],
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    "verified": result["verified"]}
+        finally:
+            account_tests_active.discard(account_id)
+
+    @app.post('/admin/models/test', dependencies=[Depends(require_admin)])
+    async def test_model(payload: dict[str, Any]):
+        if not isinstance(payload.get('model'),str) or catalog.find(payload['model']) is None:
+            raise ValueError('请选择当前目录中的模型。')
+        account_id = payload.get('account_id')
+        if not account_id:
+            candidates = {account.id for account in pool.accounts if account.available}
+            catalog_ids = catalog.eligible_ids(payload['model'],candidates)
+            if catalog_ids is not None:
+                candidates &= catalog_ids
+            account_id = next((account.id for account in pool.accounts if account.id in candidates),None)
+        if not account_id:
+            raise ValueError('没有可测试该模型的账号。')
+        return await test_account(account_id,payload)
 
     @app.get("/", include_in_schema=False)
     async def web_ui():

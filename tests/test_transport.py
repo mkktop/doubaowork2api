@@ -85,6 +85,71 @@ async def consume(transport: DirectTransport, account: Account):
     return [event async for event in transport.stream(account, {"synthetic": True})]
 
 
+@pytest.mark.parametrize("terminal", [
+    'event: SSE_REPLY_END\ndata: {"end_type":3}\n\n',
+    'data: [DONE]\n\n',
+])
+async def test_final_answer_closes_stream_without_waiting_for_eof(monkeypatch, terminal):
+    class HeldOpenStream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b'event: CHUNK_DELTA\ndata: {"text":"O"}\n\n'
+            # A message boundary must not discard the rest of the answer.
+            yield b'event: SSE_REPLY_END\ndata: {"end_type":1}\n\n'
+            yield b'event: CHUNK_DELTA\ndata: {"text":"K"}\n\n'
+            yield terminal.encode()
+            raise AssertionError("Read past final marker into the keepalive period")
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = HeldOpenStream()
+    transport = DirectTransport(Settings(upstream_base="https://upstream.test"))
+    mock_clients(monkeypatch, transport, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, stream=stream))
+    try:
+        events = await consume(transport, make_account("one"))
+        assert [event["text"] for event in events if "text" in event] == ["O", "K"]
+        assert stream.closed
+    finally:
+        await transport.close()
+
+
+async def test_stream_delivers_split_utf8_event_before_remaining_body(monkeypatch):
+    release_tail = asyncio.Event()
+    closed = asyncio.Event()
+
+    class IncrementalStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            encoded = 'event: CHUNK_DELTA\ndata: {"text":"你好"}\n\n'.encode()
+            split = encoded.index('你'.encode()) + 1
+            yield encoded[:split]
+            yield encoded[split:]
+            await release_tail.wait()
+            yield b'event: SSE_REPLY_END\ndata: {"end_type":3}\n\n'
+            raise AssertionError('Read beyond the final answer')
+
+        async def aclose(self):
+            closed.set()
+
+    transport = DirectTransport(Settings(upstream_base='https://upstream.test'))
+    mock_clients(monkeypatch, transport, lambda request: httpx.Response(
+        200, headers={'content-type': 'text/event-stream'}, stream=IncrementalStream()))
+    events = transport.stream(make_account('one'), {'synthetic': True})
+    try:
+        first = await asyncio.wait_for(anext(events), timeout=1)
+        assert first == {'text': '你好', '_event': 'CHUNK_DELTA'}
+        assert not release_tail.is_set()
+        release_tail.set()
+        assert [event async for event in events] == [{'_event': 'SSE_REPLY_END', 'end_type': 3}]
+        assert closed.is_set()
+    finally:
+        release_tail.set()
+        await events.aclose()
+        await transport.close()
+
+
 async def test_accounts_keep_independent_cookie_jars_and_response_cookies(monkeypatch) -> None:
     requests = []
 
@@ -94,7 +159,7 @@ async def test_accounts_keep_independent_cookie_jars_and_response_cookies(monkey
         return httpx.Response(200, headers={
             "content-type": "text/event-stream",
             "set-cookie": f"server_cookie={request.headers['x-request-id']}; Path=/",
-        }, text='event: STREAM_CHUNK\ndata: {"code":0,"value":"ok"}\n\n')
+        }, text='event: STREAM_CHUNK\ndata: {"code":0,"value":"ok"}\n\ndata: [DONE]\n\n')
 
     transport = DirectTransport(Settings(upstream_base="https://upstream.test"))
     clients = mock_clients(monkeypatch, transport, handler)
@@ -135,6 +200,45 @@ async def test_real_client_connection_pools_are_isolated_without_requests() -> N
         await transport.close()
 
 
+async def test_answer_end_still_reads_usage_and_reply_end(monkeypatch):
+    wire = 'event: CHUNK_DELTA\r\ndata: {"text":"OK"}\r\n\r\nevent: SSE_REPLY_END\ndata: {"end_type":2}\n\nevent: SSE_REPLY_END\ndata: {"end_type":3,"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n'
+    transport = DirectTransport(Settings(upstream_base='https://upstream.test'))
+    mock_clients(monkeypatch,transport,lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},text=wire))
+    try:
+        values = await consume(transport,make_account('one'))
+        assert values[-1]['end_type']==3 and values[-1]['usage']['total_tokens']==12
+    finally:
+        await transport.close()
+
+
+async def test_answer_end_without_reply_end_uses_bounded_grace(monkeypatch):
+    class HeartbeatOnly(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'event: CHUNK_DELTA\ndata: {"text":"OK"}\n\nevent: SSE_REPLY_END\ndata: {"end_type":2}\n\n'
+            await asyncio.Event().wait()
+        async def aclose(self):
+            pass
+    transport = DirectTransport(Settings(upstream_base='https://upstream.test'))
+    mock_clients(monkeypatch,transport,lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},stream=HeartbeatOnly()))
+    try:
+        values = await asyncio.wait_for(consume(transport,make_account('one')),2)
+        assert values[-1]['end_type']==2
+    finally:
+        await transport.close()
+
+
+async def test_missing_reply_end_does_not_turn_truncated_text_into_success(monkeypatch):
+    transport=DirectTransport(Settings(upstream_base='https://upstream.test'))
+    mock_clients(monkeypatch,transport,lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},
+        text='event: CHUNK_DELTA\ndata: {"text":"incomplete"}\n\n'))
+    try:
+        with pytest.raises(UpstreamError) as raised:
+            await consume(transport,make_account('one'))
+        assert raised.value.code=='upstream_incomplete_reply'
+    finally:
+        await transport.close()
+
+
 async def test_deleted_account_transport_disposes_only_selected_cookie_jar() -> None:
     transport = DirectTransport(Settings())
     try:
@@ -155,7 +259,7 @@ async def test_credential_revision_replaces_only_affected_client(monkeypatch) ->
         requests.append(request)
         return httpx.Response(200, headers={
             "content-type": "text/event-stream", "set-cookie": "old_jar=private; Path=/",
-        }, text='data: {"value":"ok"}\n\n')
+        }, text='data: {"value":"ok"}\n\ndata: [DONE]\n\n')
 
     transport = DirectTransport(Settings(upstream_base="https://upstream.test"))
     clients = mock_clients(monkeypatch, transport, handler)

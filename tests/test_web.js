@@ -122,14 +122,13 @@ function testFilterAndSelection() {
   const elements = {
     "#accountSearch": { value: "" },
     "#accountStatus": { value: "" },
-    "#accountGroup": { value: "" },
     "#accountErrorCode": { value: "" },
   };
   const context = loadFunctions(["escapeHtml", "updateAccountFilters", "filteredAccounts", "visibleAccounts", "renderSelection"], makeContext({
     state: {
       accounts: [
-        { id: "one", name: "Alpha", group: "A", state: "ready", error_code: 1 },
-        { id: "two", name: "Beta", group: "B", state: "cooling", error_code: 2 },
+        { id: "one", name: "Alpha", state: "ready", error_code: 1 },
+        { id: "two", name: "Beta", state: "cooling", error_code: 2 },
       ],
       selected: new Set(["one"]),
       accountPage: 0,
@@ -138,18 +137,12 @@ function testFilterAndSelection() {
     $: (selector) => elements[selector],
     $$: (selector) => selector === "[data-batch]" ? elements.batchButtons : [],
   }));
-  elements["#accountGroup"] = { value: "", innerHTML: "" };
   elements["#accountErrorCode"] = { value: "", innerHTML: "" };
-  elements["#groupSuggestions"] = { innerHTML: "" };
   elements["#selectionSummary"] = { textContent: "" };
   elements.batchButtons = [{ disabled: false }, { disabled: false }];
   context.updateAccountFilters();
-  assert.match(elements["#accountGroup"].innerHTML, /value="v:A"/);
   assert.match(elements["#accountErrorCode"].innerHTML, /value="v:1"/);
   assert.deepEqual(JSON.parse(JSON.stringify(context.filteredAccounts().map((account) => account.id))), ["one", "two"]);
-  elements["#accountGroup"].value = "v:B";
-  assert.deepEqual(JSON.parse(JSON.stringify(context.filteredAccounts().map((account) => account.id))), ["two"]);
-  elements["#accountGroup"].value = "";
   elements["#accountErrorCode"].value = "v:1";
   assert.deepEqual(JSON.parse(JSON.stringify(context.filteredAccounts().map((account) => account.id))), ["one"]);
   elements["#accountErrorCode"].value = "";
@@ -163,10 +156,7 @@ function testFilterAndSelection() {
   context.renderSelection();
   assert.match(elements["#selectionSummary"].textContent, /筛选结果 1 个.*已选 1 个（筛选外 0 个）/);
   elements["#accountSearch"].value = "";
-  context.state.accounts.push({ id: "empty", state: "ready", group: "", error_code: "" });
-  elements["#accountGroup"].value = "v:";
-  assert.deepEqual(JSON.parse(JSON.stringify(context.filteredAccounts().map((account) => account.id))), ["empty"]);
-  elements["#accountGroup"].value = "";
+  context.state.accounts.push({ id: "empty", state: "ready", error_code: "" });
   elements["#accountErrorCode"].value = "v:";
   assert.deepEqual(JSON.parse(JSON.stringify(context.filteredAccounts().map((account) => account.id))), ["empty"]);
   context.state.selected.clear();
@@ -174,207 +164,138 @@ function testFilterAndSelection() {
   assert.equal(elements.batchButtons.every((button) => button.disabled === true), true);
 }
 
-function testChatImageValidation() {
-  const context = loadFunctions(["chatImageMime", "chatImageStats", "validateChatImageFile", "formatFileSize"], makeContext({
-    CHAT_IMAGE_TYPES: new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]),
-    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
-  }));
-  const png = { name: "one.png", size: 1024, type: "image/png" };
-  const jpeg = { name: "two.jpg", size: 2 * 1024 * 1024, type: "image/jpeg" };
-  assert.deepEqual(JSON.parse(JSON.stringify(context.validateChatImageFile(png))), { name: "one.png", size: 1024, type: "image/png" });
-  assert.equal(context.chatImageMime({ type: "IMAGE/WEBP" }), "image/webp");
-  assert.throws(() => context.validateChatImageFile({ name: "x.svg", size: 1, type: "image/svg+xml" }), /仅支持 PNG、JPEG、WebP、GIF/);
-  assert.throws(() => context.validateChatImageFile({ name: "big.png", size: 10 * 1024 * 1024 + 1, type: "image/png" }), /单张不能超过 10 MiB/);
-  assert.throws(() => context.validateChatImageFile(png, Array.from({ length: 8 }, (_, index) => ({ size: index }))), /最多选择 8 张/);
-  assert.throws(() => context.validateChatImageFile(jpeg, [{ size: 19 * 1024 * 1024 }]), /总大小不能超过 20 MiB/);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.chatImageStats([png, jpeg]))), { count: 2, bytes: 1024 + 2 * 1024 * 1024 });
-  assert.equal(context.formatFileSize(1024), "1.0 KiB");
-  assert.equal(context.formatFileSize(2 * 1024 * 1024), "2.00 MiB");
+function testCatalogFiltering() {
+  const context = loadFunctions(["formatCatalogTokens", "catalogEffortLabel", "filterCatalogModels"], makeContext());
+  const models = [
+    { id: "person-kimi-k3-261111", name: "Kimi K3", price: "1.48x", image_input: true, context_window: 300000, reasoning_efforts: ["low", "high", "max"] },
+    { id: "seed-lite-7b", name: "豆包 Lite", price: "免费", image_input: null, context_window: 256000, reasoning_efforts: ["low", "medium", "high"] },
+  ];
+  const ids = (query) => context.filterCatalogModels(models, query, models[0].id).map((model) => model.id).join(",");
+  assert.equal(ids("  KIMI  "), models[0].id);
+  assert.equal(ids("免费 256k"), models[1].id);
+  assert.equal(ids("image 推理"), models[0].id);
+  assert.equal(ids("默认"), models[0].id);
+  assert.equal(ids("not-a-model"), "");
+  assert.equal(ids("  "), models.map((model) => model.id).join(","));
+  assert.equal(models.length, 2);
 }
 
-function testChatContentParts() {
-  const context = loadFunctions(["chatContentParts"], makeContext());
-  assert.equal(context.chatContentParts("hello", []), "hello");
-  assert.equal(context.chatContentParts("  hello  ", []), "hello");
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(context.chatContentParts("", [{ name: "one.png", dataUrl: "data:image/png;base64,AA" }]))),
-    [{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } }],
-  );
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(context.chatContentParts("describe", [
-      { name: "one.png", dataUrl: "data:image/png;base64,AA" },
-      { name: "two.jpg", dataUrl: "data:image/jpeg;base64,BB" },
-    ]))),
-    [
-      { type: "text", text: "describe" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,AA" } },
-      { type: "image_url", image_url: { url: "data:image/jpeg;base64,BB" } },
-    ],
-  );
-  assert.throws(() => context.chatContentParts("hello", [{ name: "pending.png", dataUrl: "" }]), /尚未读取完成/);
+function testUsageExcludesRunningRequestsFromCompletedAverage() {
+  const context = loadFunctions(["aggregateModelUsage"], makeContext());
+  const rows = context.aggregateModelUsage([
+    { model: "alpha", status: "success", duration_ms: 1000 },
+    { model: "alpha", status: "error", duration_ms: 3000 },
+    { model: "alpha", status: "running", duration_ms: 90000 },
+    { model: "beta", status: "running", duration_ms: 80000 },
+  ]);
+  assert.equal(rows[0].model, "alpha");
+  assert.equal(rows[0].total, 3);
+  assert.equal(rows[0].finished, 2);
+  assert.equal(rows[0].duration / rows[0].finished, 2000);
+  assert.equal(rows[1].finished, 0);
+  assert.equal(rows[1].duration, 0);
 }
 
-function testChatContentSnapshot() {
-  const context = loadFunctions(["chatContentParts"], makeContext());
-  const state = {
-    chatImages: [
-      { name: "one.png", dataUrl: "data:image/png;base64,AA" },
-      { name: "two.png", dataUrl: "data:image/png;base64,BB" },
-    ],
-  };
-  const snapshot = state.chatImages.map((image) => ({ ...image }));
-  const content = context.chatContentParts("inspect", snapshot);
-  state.chatImages.splice(0);
-  assert.equal(content.length, 3);
-  assert.equal(content[1].image_url.url, "data:image/png;base64,AA");
-  assert.equal(content[2].image_url.url, "data:image/png;base64,BB");
+function testErrorDetailsEscapeUntrustedText() {
+  const context = loadFunctions(["escapeHtml", "renderErrorDetails"], makeContext());
+  assert.match(context.renderErrorDetails(""), /—/);
+  const short = context.renderErrorDetails('<img src=x onerror="bad()">');
+  assert.ok(!short.includes("<img"));
+  assert.match(short, /&lt;img/);
+  const long = context.renderErrorDetails('<script>bad()</script>' + "long error ".repeat(20));
+  assert.match(long, /<details/);
+  assert.ok(!long.includes("<script>"));
+  assert.match(long, /&lt;script/);
 }
 
-function testChatImageCapabilityLabel() {
-  const context = loadFunctions(["chatImageCapabilityLabel"], makeContext());
-  assert.equal(context.chatImageCapabilityLabel({ image_input: true }), "已验证识图");
-  assert.equal(context.chatImageCapabilityLabel({ image_input: null }), "");
-  assert.equal(context.chatImageCapabilityLabel({ image_input: false }), "");
-  assert.equal(context.chatImageCapabilityLabel({}), "");
+function testRequestMetricsKeepUnknownAndEstimatedDistinct() {
+  const context = loadFunctions(["escapeHtml", "renderRequestMetric"], makeContext());
+  assert.match(context.renderRequestMetric(null), /—/);
+  assert.match(context.renderRequestMetric(0), />0</);
+  assert.match(context.renderRequestMetric(1234, true), /≈1,234/);
+  assert.ok(!context.renderRequestMetric('<img src=x>').includes('<img'));
 }
 
-function testChatImageEpochInvalidatesReads() {
-  const context = loadFunctions([
-    "formatFileSize", "chatImageStats", "chatImageKey", "renderChatImages",
-    "clearChatImages", "removeChatImage",
-  ], makeContext({
-    state: {
-      chatImages: [{ id: "one" }, { id: "two" }],
-      chatImageEpoch: 3,
-      chatImageQueue: Promise.resolve(),
-    },
-    $: () => ({ value: "selected", replaceChildren() {}, append() {}, hidden: false, textContent: "", disabled: false }),
-    document: {
-      createElement: () => ({
-        className: "",
-        dataset: {},
-        setAttribute() {},
-        append() {},
-      }),
-    },
-    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
-  }));
-  assert.equal(context.chatImageKey({ name: "one.png", size: 4, lastModified: 5 }), "one.png\u00004\u00005");
-  context.removeChatImage("one");
-  assert.equal(context.state.chatImageEpoch, 3);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.chatImages.map((image) => image.id))), ["two"]);
-  context.clearChatImages();
-  assert.equal(context.state.chatImageEpoch, 4);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.chatImages)), []);
-  context.removeChatImage("missing");
-  assert.equal(context.state.chatImageEpoch, 4);
+testRequestMetricsKeepUnknownAndEstimatedDistinct();
+function testAutomationRecordsRespectDayAndRunningState() {
+  const context = loadFunctions(['automationAccountRows'], makeContext());
+  const accounts = ['today','old','pending','running','queued'].map((id) => ({id, available:true}));
+  const benefits = {today:'2026-11-14', config:{account_ids:['today','pending']}, running:['running'], accounts:{
+    today:{checkin:{day:'2026-11-14',status:'claimed',updated_at:110}},
+    old:{checkin:{day:'2026-11-13',status:'done',updated_at:50}},
+    pending:{checkin:{day:'2026-11-14',status:'pending',updated_at:110}},
+  }};
+  const rows = context.automationAccountRows(accounts, benefits, new Set(['today','pending','queued']), 100);
+  assert.deepEqual(Array.from(rows, (row) => row.status), ['done','unknown','pending','running','queued']);
+  assert.equal(rows[0].planned, true);
+  assert.equal(rows[1].planned, false);
+  assert.equal(rows[1].record.day, '2026-11-13');
+  assert.equal(context.automationAccountRows(accounts, {...benefits,today:'2026-11-15'})[0].status, 'unknown');
 }
 
-function makeChatImageContext({ state, readChatImage }) {
-  return loadFunctions([
-    "formatFileSize", "chatImageMime", "chatImageStats", "validateChatImageFile",
-    "chatImageKey", "renderChatImages", "addChatImageFiles", "enqueueChatImageFiles",
-    "removeChatImage",
-  ], makeContext({
-    state,
-    readChatImage,
-    showToast: () => {},
-    CHAT_IMAGE_TYPES: new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]),
-    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
-    $: () => ({ value: "", replaceChildren() {}, append() {}, hidden: false, textContent: "", disabled: false }),
-    document: {
-      createElement: () => ({
-        className: "",
-        dataset: {},
-        setAttribute() {},
-        append() {},
-      }),
-    },
-  }));
+function testAutomationScopeCannotBroadenAfterAccountDisappears() {
+  const context = loadFunctions(['automationScopeIds'], makeContext());
+  const accounts = [{id:'one',available:true},{id:'two',available:true},{id:'disabled',available:false}];
+  assert.deepEqual(Array.from(context.automationScopeIds(accounts, '')), ['one','two']);
+  assert.deepEqual(Array.from(context.automationScopeIds(accounts, 'one')), ['one']);
+  assert.deepEqual(Array.from(context.automationScopeIds(accounts, '', new Set(['one']))), ['two']);
+  assert.throws(() => context.automationScopeIds(accounts, 'gone'), /已删除/);
+  assert.throws(() => context.automationScopeIds(accounts, 'disabled'), /停用/);
 }
 
-async function testChatImageQueueUsesEnqueueEpoch() {
-  const gate = {};
-  gate.promise = new Promise((resolve) => { gate.release = resolve; });
-  let reads = 0;
-  const state = {
-    sessionEpoch: 7,
-    chatImageEpoch: 4,
-    chatImages: [],
-    chatImageQueue: Promise.resolve(),
-  };
-  const context = makeChatImageContext({
-    state,
-    readChatImage: async () => {
-      reads += 1;
-      await gate.promise;
-      return "data:image/png;base64,AA";
-    },
-  });
-  const file = { name: "old.png", size: 10, type: "image/png", lastModified: 1 };
-  context.enqueueChatImageFiles([file]);
-  state.sessionEpoch += 1;
-  gate.release();
-  await context.state.chatImageQueue;
-  assert.equal(reads, 0);
-  assert.deepEqual(JSON.parse(JSON.stringify(state.chatImages)), []);
+testAutomationRecordsRespectDayAndRunningState();
+function testManualCheckinRequiresAttentionAndReadOnlyRecheck() {
+  const context = loadFunctions(['automationAccountRows'], makeContext());
+  const accounts = [{id:'manual',available:true}];
+  const benefits = {today:'2026-11-14', accounts:{manual:{checkin:{
+    day:'2026-11-14',status:'manual_required',code:'710010702',query_only:true,
+  }}}};
+  const row = context.automationAccountRows(accounts, benefits)[0];
+  assert.equal(row.status, 'attention');
+  assert.equal(row.label, '需官方签到');
+  assert.equal(row.queryOnly, true);
+  assert.equal(context.automationAccountRows(accounts, {...benefits,today:'2026-11-15'})[0].queryOnly, false);
 }
-
-async function testChatImageRemoveDoesNotCancelOtherReads() {
-  const gates = [];
-  const state = {
-    sessionEpoch: 1,
-    chatImageEpoch: 0,
-    chatImages: [],
-    chatImageQueue: Promise.resolve(),
-  };
-  const context = makeChatImageContext({
-    state,
-    readChatImage: async (file) => {
-      const gate = {};
-      gate.promise = new Promise((resolve) => { gate.release = resolve; });
-      gates.push({ name: file.name, gate });
-      await gate.promise;
-      return `data:image/png;base64,${file.name}`;
-    },
-  });
-  const first = { name: "first.png", size: 10, type: "image/png", lastModified: 1 };
-  const second = { name: "second.png", size: 10, type: "image/png", lastModified: 2 };
-  context.enqueueChatImageFiles([first, second]);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(state.chatImages.length, 1);
-  assert.equal(state.chatImages[0].name, "first.png");
-  context.removeChatImage(state.chatImages[0].id);
-  assert.equal(state.chatImageEpoch, 0);
-  gates[0].gate.release();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(state.chatImages.length, 1);
-  assert.equal(state.chatImages[0].name, "second.png");
-  gates[1].gate.release();
-  await context.state.chatImageQueue;
-  assert.equal(state.chatImages.length, 1);
-  assert.equal(state.chatImages[0].name, "second.png");
-  assert.equal(state.chatImages[0].pending, false);
-  assert.equal(state.chatImages[0].dataUrl, "data:image/png;base64,second.png");
-}
-
+testManualCheckinRequiresAttentionAndReadOnlyRecheck();
+testAutomationScopeCannotBroadenAfterAccountDisappears();
 testFormatTime();
+testCatalogFiltering();
+testUsageExcludesRunningRequestsFromCompletedAverage();
+testErrorDetailsEscapeUntrustedText();
 testAccountImportDocuments();
 testAccountImportFile();
 testMissingKeyAccounts();
 testMissingBindingSaveGuard();
 testFilterAndSelection();
-testChatImageValidation();
-testChatContentParts();
-testChatContentSnapshot();
-testChatImageCapabilityLabel();
-testChatImageEpochInvalidatesReads();
 
-(async () => {
-  await testChatImageQueueUsesEnqueueEpoch();
-  await testChatImageRemoveDoesNotCancelOtherReads();
+async function testAutomationExecutionWaitsForFinalSnapshotAndReleasesBusyState() {
+  let resolvePrior;
+  let priorFinished = false;
+  let cleared = 0;
+  let refreshed = 0;
+  const modelState = {sessionEpoch:1,accounts:[{id:'one',available:true}],benefits:{running:[]},automationRunningIds:new Set(),automationStartedAt:0};
+  modelState.refreshPromise = new Promise((resolve) => { resolvePrior = resolve; });
+  const context = loadFunctions(['checkinAccounts'], makeContext({
+    state:modelState,
+    renderAutomation() {},
+    setInterval() { return 7; },
+    clearInterval(id) { assert.equal(id,7); cleared += 1; },
+    async api(path, options) {
+      assert.equal(path,'/admin/checkin');
+      assert.deepEqual(JSON.parse(options.body), {ids:['one']});
+      setTimeout(() => { priorFinished = true; modelState.refreshPromise = null; resolvePrior(); },0);
+      return {results:[{id:'one',status:'done'}]};
+    },
+    async refresh() { assert.ok(priorFinished); refreshed += 1; },
+  }));
+  const result = await context.checkinAccounts(['one'], false);
+  assert.equal(result[0].status,'done');
+  assert.equal(refreshed,1);
+  assert.equal(modelState.automationRunningIds.size,0);
+  assert.equal(modelState.automationPollTimer,null);
+  assert.ok(cleared >= 1);
+}
+
+testAutomationExecutionWaitsForFinalSnapshotAndReleasesBusyState().then(() => {
   console.log("test_web.js: all tests passed");
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+}).catch((error) => { console.error(error); process.exitCode = 1; });

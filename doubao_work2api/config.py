@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .catalog import DEFAULT_MODEL_ID
+
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name, "").strip()
@@ -20,7 +22,8 @@ class Settings:
     upstream_base: str = "https://www.doubao.com"
     request_timeout_seconds: float = 180.0
     cooldown_seconds: int = 60
-    default_model: str = "deepseek-v4.1-flash"
+    account_max_concurrent: int = 0
+    default_model: str = DEFAULT_MODEL_ID
     app_id: str = "1044603"
     pc_version: str = "2.36.11"
     runtime_version: str = "3.45.3"
@@ -48,7 +51,7 @@ class Settings:
             ),
             cooldown_seconds=_env_int("DOUBAO_WORK_COOLDOWN_SECONDS", 60),
             default_model=os.getenv(
-                "DOUBAO_WORK_DEFAULT_MODEL", "deepseek-v4.1-flash"
+                "DOUBAO_WORK_DEFAULT_MODEL", DEFAULT_MODEL_ID
             ).strip(),
             app_id=os.getenv("DOUBAO_WORK_APP_ID", "1044603").strip(),
             pc_version=os.getenv(

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, PrivateAttr, model_validator
 
-from .catalog import normalize_model
+from .catalog import DEFAULT_MODEL_ID, normalize_model
+from .compatibility import without_client_hints
 
 
 class ChatMessage(BaseModel):
@@ -17,8 +18,14 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
+    _model_spec: Any = PrivateAttr(default=None)
+    _affinity_scope: str = PrivateAttr(default='')
+    _conversation_hint: str = PrivateAttr(default='')
+    _official_usage: Any = PrivateAttr(default=None)
+    _verification_probe_id: str = PrivateAttr(default='')
+    _native_reused: bool = PrivateAttr(default=False)
 
-    model: str = "deepseek-v4.1-flash"
+    model: str = DEFAULT_MODEL_ID
     messages: list[ChatMessage] = Field(min_length=1)
     stream: bool = False
     temperature: float | None = None
@@ -36,6 +43,11 @@ class ChatCompletionRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     truncation: Literal["disabled", "auto"] = "disabled"
     stream_options: dict[str, Any] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def ignore_client_hints(cls, value: Any) -> Any:
+        return without_client_hints(value)
 
     @property
     def normalized_model(self) -> str:

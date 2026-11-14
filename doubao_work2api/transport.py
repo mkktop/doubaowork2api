@@ -90,6 +90,10 @@ class DirectTransport:
 
     def _create_client(self, account: Account) -> httpx.AsyncClient:
         return httpx.AsyncClient(
+            # HTTP/1.1 can batch this upstream's SSE headers, events and final
+            # marker for tens of seconds. Prefer HTTP/2 via ALPN; httpx still
+            # negotiates HTTP/1.1 when the server does not support HTTP/2.
+            http2=True,
             timeout=httpx.Timeout(
                 self.settings.request_timeout_seconds, connect=20
             ),
@@ -102,6 +106,7 @@ class DirectTransport:
         # may refresh cookies, while an import must discard the old jar/pool.
         revision = hashlib.sha256(json.dumps(
             [account.cookies, account.device_id, account.web_id, account.device_name,
+             account.app_id, account.client_profile, account.client_version, account.fingerprint, account.user_agent,
              repr(self.settings)],
             sort_keys=True,
         ).encode("utf-8")).hexdigest()
@@ -144,8 +149,8 @@ class DirectTransport:
     def _query(self, account: Account) -> str:
         device_id = account.device_id
         params = {
-            "aid": self.settings.app_id,
-            "real_aid": self.settings.app_id,
+            "aid": account.app_id or self.settings.app_id,
+            "real_aid": account.app_id or self.settings.app_id,
             "device_id": device_id,
             "tea_uuid": device_id,
             "web_id": account.web_id,
@@ -156,8 +161,8 @@ class DirectTransport:
             "sys_region": "CN",
             "pkg_type": "release_version",
             "version_code": "20800",
-            "pc_version": self.settings.pc_version,
-            "doubao_pc_version": self.settings.pc_version,
+            "pc_version": account.client_version or self.settings.pc_version,
+            "doubao_pc_version": account.client_version or self.settings.pc_version,
             "runtime": "web",
             "runtime_version": self.settings.runtime_version,
             "samantha_web": "1",
@@ -166,10 +171,14 @@ class DirectTransport:
             "client_platform": "pc_client",
             "chromium_version": "147.0.7727.149",
             "channel": "win",
-            "fp": f"verify_{device_id}",
+            "fp": account.fingerprint or account.cookies.get('s_v_web_id') or f"verify_{device_id}",
             "web_tab_id": str(uuid.uuid4()),
             "tz_name": "Asia/Shanghai",
         }
+        if account.client_profile == 'web':
+            params.update(web_platform='browser', doubao_device_platform='web')
+            for key in ('client_platform', 'runtime', 'runtime_version'):
+                params.pop(key, None)
         return urlencode(sorted(params.items()))
 
     async def stream(
@@ -186,7 +195,7 @@ class DirectTransport:
             "Content-Type": "application/json",
             "Origin": self.settings.upstream_base,
             "Referer": f"{self.settings.upstream_base}/chat/",
-            "User-Agent": USER_AGENT,
+            "User-Agent": account.user_agent or USER_AGENT,
             "agw-js-conv": "str",
             "last-event-id": "undefined",
             "x-lgw-req-sdk-type": "3",
@@ -223,26 +232,65 @@ class DirectTransport:
                     "Doubao returned a non-SSE response "
                     f"({content_type or 'unknown'})."
                 )
-            event_name = ""
-            async for line in response.aiter_lines():
-                line = line.strip()
+            event_name, data = '', []
+            lines = response.aiter_lines().__aiter__()
+            answer_ended_at = None
+            received_event = False
+            while True:
+                try:
+                    if answer_ended_at is None:
+                        line = await anext(lines)
+                    else:
+                        remaining = 1.0-(asyncio.get_running_loop().time()-answer_ended_at)
+                        if remaining <= 0:
+                            return
+                        line = await asyncio.wait_for(anext(lines), remaining)
+                except asyncio.TimeoutError:
+                    # A completed answer without a reply-end frame must not
+                    # wait for the upstream's long heartbeat-only period.
+                    if answer_ended_at is not None:
+                        return
+                    raise UpstreamError('上游响应等待超时。',code='upstream_timeout') from None
+                except StopAsyncIteration:
+                    if data:
+                        line = ''
+                    else:
+                        if received_event and answer_ended_at is None:
+                            raise UpstreamError('上游在完整结束标记之前断开响应。',code='upstream_incomplete_reply')
+                        return
                 if line.startswith("event:"):
                     event_name = line[6:].strip()
                     continue
-                if not line.startswith("data:"):
+                if line.startswith('data:'):
+                    data.append(line[5:].lstrip(' '))
+                    if sum(map(len,data)) > 4*1024*1024:
+                        raise UpstreamError('上游 SSE 事件过大。',code='upstream_frame_too_large')
                     continue
-                raw = line[5:].strip()
-                if not raw or raw in {"[DONE]", "{}"}:
+                if line or not data:
+                    continue
+                raw = '\n'.join(data).strip()
+                data = []
+                frame_event, event_name = event_name, ''
+                if raw == "[DONE]":
+                    return
+                if not raw or raw == "{}":
                     continue
                 try:
                     parsed = json.loads(raw)
                 except json.JSONDecodeError:
-                    continue
+                    raise UpstreamError('上游 SSE 事件不是有效 JSON。',code='invalid_upstream_event') from None
                 if not isinstance(parsed, dict):
                     continue
-                parsed["_event"] = event_name
+                parsed["_event"] = frame_event
                 classify_body_error(parsed)
+                received_event = True
                 yield parsed
+                if frame_event == 'SSE_REPLY_END' and parsed.get('end_type') in {3,'3'}:
+                    return
+                if frame_event == 'SSE_REPLY_END' and parsed.get('end_type') in {2,'2'}:
+                    answer_ended_at = asyncio.get_running_loop().time()
+                elif frame_event in {'CHUNK_DELTA','STREAM_CHUNK','STREAM_MSG_NOTIFY','FULL_MSG_NOTIFY'}:
+                    answer_ended_at = None
 
     async def close(self) -> None:
         async with self._clients_lock:

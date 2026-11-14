@@ -15,6 +15,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from .errors import GatewayError
 from .models import ChatMessage
+from .catalog import normalize_model
 
 
 class ResponseNotFound(GatewayError):
@@ -136,7 +137,7 @@ class ResponseStore:
         try:
             raw = self._cipher.decrypt(token.encode("ascii"), ttl=24 * 3600)
             value = json.loads(raw)
-            if value["version"] != 1 or value["kind"] != kind or value["owner"] != owner or value["model"] != model:
+            if value["version"] != 1 or value["kind"] != kind or value["owner"] != owner or normalize_model(value["model"]) != normalize_model(model):
                 raise ValueError
             messages = [ChatMessage.model_validate(message) for message in value["messages"]]
             if not messages:

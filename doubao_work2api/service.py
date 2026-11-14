@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .accounts import Account, AccountPool
-from .catalog import resolve_upstream_key
+from .catalog import DEFAULT_MODEL_ID, REASONING_LEVELS, request_model
+from .affinity import AccountAffinity
 from .errors import (
     NoAvailableAccountError,
     UpstreamAuthError,
@@ -21,6 +22,10 @@ from .errors import (
 )
 from .logs import RequestLog, RequestLogEntry
 from .models import ChatCompletionRequest
+from .models import ChatMessage
+from .usage import official_usage
+from .native_sessions import NativeSessions
+from .routing import RoutingPolicy
 from .protocol import (
     chunk_payload,
     completion_id,
@@ -29,6 +34,7 @@ from .protocol import (
     sse_data,
     upstream_payload,
     validate_request,
+    resolve_reasoning_effort,
 )
 from .transport import DirectTransport
 from .tool_bridge import parse_tool_response
@@ -47,7 +53,7 @@ class ChatService:
         model_key: str,
         app_id: str,
         workspace_root: Path,
-        default_model: str = "deepseek-v4.1-flash",
+        default_model: str = DEFAULT_MODEL_ID,
         request_log: RequestLog | None = None,
     ) -> None:
         self.pool = pool
@@ -57,12 +63,57 @@ class ChatService:
         self.workspace_root = workspace_root
         self.default_model = default_model
         self.request_log = request_log
+        self.catalog = None
+        self.affinity = AccountAffinity()
+        self.native_sessions = NativeSessions()
+        self.routing = RoutingPolicy()
+
+    def prepare(self, request):
+        if self.catalog is not None:
+            request = self.catalog.bind(request)
+        return validate_request(request)
+
+    async def probe(
+        self, request: ChatCompletionRequest, *, account_id: str,
+    ) -> dict[str, Any]:
+        """Verify one account from its first answer text, then close the stream."""
+        request = self.prepare(request)
+        target = self.pool.find(account_id)
+        recovery = bool(target and target.enabled and target.failure_type == 'needs_verification')
+        if recovery:
+            request._verification_probe_id = account_id
+        entry = self._start_log(request, "admin-account-test")
+        started_at = time.time()
+        received = False
+        try:
+            async with aclosing(self._fragments_with_retry(request, entry, {account_id})) as fragments:
+                async for kind, text in fragments:
+                    if kind != "content" or not text.strip():
+                        continue
+                    received = True
+                    if recovery:
+                        continue
+                    account = self.pool.find(account_id)
+                    if account is not None:
+                        self.pool.mark_success(account, started_at=started_at)
+                    self._log_success(entry)
+                    return {"model": request.normalized_model, "verified": "first_content"}
+            if received and recovery:
+                self._log_success(entry)
+                return {'model':request.normalized_model,'verified':'complete_recovery'}
+            raise UpstreamError("Doubao returned no answer text.", code="empty_response")
+        except Exception as exc:
+            self._log_failure(entry, str(exc))
+            raise
+        finally:
+            self._log_interrupted(entry)
 
     async def complete(
         self, request: ChatCompletionRequest, *,
         allowed_ids: set[str] | None = None, key_id: str = "",
     ) -> dict[str, Any]:
-        request = validate_request(request)
+        request._affinity_scope = key_id
+        request = self.prepare(request)
         log_entry = self._start_log(request, key_id)
         content: list[str] = []
         reasoning: list[str] = []
@@ -96,11 +147,15 @@ class ChatService:
             )
             result["choices"][0]["finish_reason"] = finish_reason
             result["usage"]["is_estimated"] = True
+            if request._official_usage:
+                result['usage'] = request._official_usage
             result["gateway_context"] = getattr(request, "gateway_context", {})
+            result['gateway_context']['native_session_reused'] = request._native_reused
             if tool_calls:
                 result["choices"][0]["message"]["content"] = answer or None
                 result["choices"][0]["message"]["tool_calls"] = tool_calls
                 result["choices"][0]["finish_reason"] = "tool_calls"
+            self._log_usage(log_entry, request, output_text, "".join(reasoning))
             self._log_success(log_entry)
             return result
         except Exception as exc:
@@ -114,12 +169,14 @@ class ChatService:
         self, request: ChatCompletionRequest, *,
         allowed_ids: set[str] | None = None, key_id: str = "",
     ) -> AsyncIterator[str]:
-        request = validate_request(request)
+        request._affinity_scope = key_id
+        request = self.prepare(request)
         log_entry = self._start_log(request, key_id)
         request_id = completion_id()
         has_tools = False
         finish_reason = "stop"
         visible_output: list[str] = []
+        reasoning_output: list[str] = []
         converted = self._converted_fragments(request, log_entry, allowed_ids)
         try:
             yield sse_data(
@@ -143,6 +200,8 @@ class ChatService:
                     finish_reason = text
                     continue
                 visible_output.append(text)
+                if kind == "reasoning":
+                    reasoning_output.append(text)
                 field = "content" if kind == "content" else "reasoning"
                 yield sse_data(
                     chunk_payload(
@@ -165,8 +224,9 @@ class ChatService:
                 yield sse_data({
                     "id": request_id, "object": "chat.completion.chunk", "model": request.normalized_model,
                     "created": int(time.time()), "choices": [],
-                    "usage": {"prompt_tokens": prompt_count, "completion_tokens": completion_count, "total_tokens": prompt_count + completion_count, "is_estimated": True},
+                    "usage": request._official_usage or {"prompt_tokens": prompt_count, "completion_tokens": completion_count, "total_tokens": prompt_count + completion_count, "is_estimated": True},
                 })
+            self._log_usage(log_entry, request, "".join(visible_output), "".join(reasoning_output))
             yield "data: [DONE]\n\n"
             self._log_success(log_entry)
         except Exception as exc:
@@ -261,10 +321,24 @@ class ChatService:
                 raise UnsupportedContentError("Total image data exceeds the 20 MiB request limit.")
             images.append(image)
         attempted: set[str] = set()
+        affinity_key = self.affinity.key(request)
+        if self.catalog is not None and self.pool.accounts:
+            catalog_ids = self.catalog.eligible_ids(request.normalized_model, {account.id for account in self.pool.accounts})
+            if catalog_ids is not None:
+                allowed_ids = catalog_ids if allowed_ids is None else allowed_ids & catalog_ids
+                if not allowed_ids:
+                    raise NoAvailableAccountError('当前允许的账号尚未在官方目录中开通此模型，请刷新目录或使用有权限的账号。', code='model_no_available_account')
         last_error: Exception | None = None
+        large = self.routing.is_large(request)
+        if large:
+            eligible = {account.id for account in self.pool.accounts if not self.routing.blocked(account.id)}
+            allowed_ids = eligible if allowed_ids is None else allowed_ids & eligible
+            if not allowed_ids:
+                from .errors import AccountBusyError
+                raise AccountBusyError('大请求预算暂时用尽，请稍后重试或调整转发策略。', code='large_request_budget')
         for _ in range(max(1, len(self.pool.accounts))):
             try:
-                account = await self.pool.acquire(allowed_ids=allowed_ids)
+                account = await self.pool.acquire(allowed_ids=allowed_ids, preferred_id=self.affinity.get(affinity_key), verification_id=request._verification_probe_id or None)
             except NoAvailableAccountError:
                 if last_error:
                     raise last_error
@@ -272,22 +346,34 @@ class ChatService:
             if account.id in attempted:
                 await self.pool.release(account)
                 break
+            if large and self.routing.blocked(account.id):
+                await self.pool.release(account)
+                allowed_ids.discard(account.id)
+                continue
             attempted.add(account.id)
+            if large:
+                self.routing.admit(account.id)
+            request._official_usage = None
             if self.request_log is not None and log_entry is not None:
                 self.request_log.account(log_entry, account.id)
             emitted = False
+            started_at = time.time()
             try:
                 async with aclosing(self._fragments(account, request, images)) as fragments:
                     async for fragment in fragments:
                         emitted = True
+                        if log_entry is not None and not log_entry.first_token_at and fragment[0] in {"content", "reasoning"} and fragment[1]:
+                            log_entry.first_token_at = time.time()
                         yield fragment
                 if not emitted:
                     raise UpstreamError(
                         "Doubao returned an empty response.", code="empty_response"
                     )
-                self.pool.mark_success(account)
+                self.pool.mark_success(account, started_at=started_at)
+                self.affinity.bind(affinity_key, account.id)
                 return
             except UpstreamAuthError as exc:
+                self.affinity.forget(affinity_key)
                 if emitted:
                     raise
                 account.last_error = exc.message
@@ -300,18 +386,20 @@ class ChatService:
                     account.last_error = exc.message
                 last_error = exc
             except UpstreamChallengeError as exc:
+                self.affinity.forget(affinity_key)
                 if emitted:
                     raise
                 account.last_error = exc.message
                 account.error_code = exc.code
                 account.last_error_at = time.time()
                 try:
-                    await self.pool.set_enabled(account.id, False)
+                    await self.pool.set_enabled(account.id, account.enabled)
                 except Exception:
                     account.enabled = False
                     account.last_error = exc.message
                 last_error = exc
             except UpstreamRateLimitError as exc:
+                self.affinity.forget(affinity_key)
                 if emitted:
                     raise
                 self.pool.mark_cooldown(account, exc.message, error_code=exc.code)
@@ -321,6 +409,7 @@ class ChatService:
                 # must not fan out the same private images across the pool.
                 raise
             except (UpstreamError, OSError) as exc:
+                self.affinity.forget(affinity_key)
                 if emitted:
                     raise
                 self.pool.mark_cooldown(account, str(exc), error_code=getattr(exc, "code", "network_error"))
@@ -335,27 +424,68 @@ class ChatService:
         self, account: Account, request: ChatCompletionRequest,
         images: list[ImageInput] | None = None,
     ) -> AsyncIterator[tuple[str, str]]:
-        async with account.lock:
-            uploaded = [
-                await upload_image(self.transport, account, image, filename=f"image-{index}.{image.filename.rsplit('.', 1)[-1]}")
-                for index, image in enumerate(images or [], 1)
-            ]
-            workspace = self._workspace(account)
-            payload = upstream_payload(
-                request,
-                model_key=resolve_upstream_key(request.normalized_model),
-                workspace=workspace,
-                device_name=account.device_name or socket.gethostname().upper(),
-                app_id=self.app_id,
-                device_id=account.device_id,
-                images=uploaded,
-            )
-            parser = UpstreamTextParser()
+        # Each request has its own uploads, workspace, IDs and parser. The pool
+        # reserves capacity; a whole-request account lock would ignore that cap.
+        uploaded = [
+            await upload_image(self.transport, account, image, filename=f"image-{index}.{image.filename.rsplit('.', 1)[-1]}")
+            for index, image in enumerate(images or [], 1)
+        ]
+        workspace = self._workspace(account)
+        payload = upstream_payload(
+            request,
+            model_key=request_model(request).upstream_key,
+            workspace=workspace,
+            device_name=account.device_name or socket.gethostname().upper(),
+            app_id=account.app_id or self.app_id,
+            device_id=account.device_id,
+            images=uploaded,
+        )
+        if self.catalog is not None and account.id in self.catalog.bot_ids:
+            payload['client_meta']['bot_id'] = self.catalog.bot_ids[account.id]
+        parser = UpstreamTextParser()
+        affinity_key = self.affinity.key(request)
+        signature = json.dumps([request.normalized_model,resolve_reasoning_effort(request),
+            request.response_format,getattr(request,'verbosity',None),request.stop,
+            request.max_tokens,request.max_completion_tokens],sort_keys=True)
+        eligible = self.routing.config['native_sessions'] and not request.tools and not images
+        entry, reserved = self.native_sessions.reserve(affinity_key,account,request,signature) if eligible else (None,False)
+        request._native_reused = bool(entry)
+        if entry:
+            from .protocol import render_prompt
+            tail = request.messages[entry['count']:]
+            payload['client_meta'].update(conversation_id=entry['conversation_id'], last_section_id=entry['section_id'])
+            payload['option']['need_create_conversation'] = False
+            payload['messages'][0]['content_block'][0]['content']['text_block']['text'] = render_prompt(tail)
+            payload['client_meta']['local_conversation_id'] = ''
+        conversation_id = entry['conversation_id'] if entry else ''
+        section_id = entry['section_id'] if entry else ''
+        collected = {'content':[], 'reasoning':[]}
+        complete = False
+        try:
             async with aclosing(self.transport.stream(account, payload)) as events:
                 async for event in events:
+                    billing = official_usage(event)
+                    if billing:
+                        request._official_usage = billing
+                    ack = event.get('ack_client_meta')
+                    if isinstance(ack,dict):
+                        conversation_id = ack.get('conversation_id') or conversation_id
+                        section_id = ack.get('section_id') or section_id
+                    if event.get('_event') == 'SSE_REPLY_END' and event.get('end_type') in {3,'3'}:
+                        complete = True
                     for kind, text in parser.feed(event):
                         if text:
+                            collected[kind].append(text)
                             yield kind, text
+            if reserved and complete and conversation_id:
+                assistant = ChatMessage(role='assistant',content=''.join(collected['content']))
+                if collected['reasoning']:
+                    assistant.reasoning_content = ''.join(collected['reasoning'])
+                self.native_sessions.save(affinity_key,account,signature,
+                    request.messages+[assistant],conversation_id,section_id)
+        finally:
+            if reserved:
+                self.native_sessions.release(affinity_key,invalidate=not complete)
 
     def _workspace(self, account: Account) -> Path:
         safe_id = "".join(
@@ -379,8 +509,28 @@ class ChatService:
         return self.request_log.start(
             model=request.normalized_model,
             stream=request.stream,
-            meta={"messages": len(request.messages), "key_id": key_id},
+            meta={"messages": len(request.messages), "key_id": key_id,
+                  "reasoning_effort": REASONING_LEVELS[resolve_reasoning_effort(request) - 3]},
         )
+
+    def _log_usage(self, entry: RequestLogEntry | None, request: ChatCompletionRequest,
+                   output: str, reasoning: str) -> None:
+        if entry is None:
+            return
+        entry.meta['native_reused'] = request._native_reused
+        from .context import estimate_request_tokens
+        entry.input_tokens = estimate_request_tokens(request)
+        entry.output_tokens = estimate_tokens(output)
+        entry.reasoning_tokens = estimate_tokens(reasoning) if reasoning else 0
+        entry.usage_estimated = True
+        if request._official_usage:
+            value = request._official_usage
+            entry.input_tokens, entry.output_tokens = value['prompt_tokens'],value['completion_tokens']
+            entry.total_tokens = value['total_tokens']
+            entry.reasoning_tokens = value.get('completion_tokens_details',{}).get('reasoning_tokens')
+            entry.cached_tokens = value.get('prompt_tokens_details',{}).get('cached_tokens')
+            entry.usage_estimated = False
+            entry.meta['usage_source'] = 'official'
 
     def _log_success(self, entry: RequestLogEntry | None) -> None:
         if self.request_log is not None and entry is not None:

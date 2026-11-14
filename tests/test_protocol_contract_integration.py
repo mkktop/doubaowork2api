@@ -127,12 +127,13 @@ async def test_sse_verification_error_disables_account_with_actual_code(tmp_path
         with pytest.raises(UpstreamChallengeError):
             await service.complete(ChatCompletionRequest(messages=[{"role": "user", "content": "synthetic"}]))
         account = service.pool.accounts[0]
-        assert not account.enabled
+        assert account.enabled and not account.available
+        assert account.public_dict()['state'] == 'needs_verification'
         assert account.error_code == "710022004"
         assert account.in_flight == 0 and not account.lock.locked()
         reloaded = AccountPool(tmp_path / "accounts")
         reloaded.load()
-        assert not reloaded.accounts[0].enabled
+        assert reloaded.accounts[0].enabled and not reloaded.accounts[0].available
         assert reloaded.accounts[0].error_code == "710022004"
     finally:
         await transport.close()

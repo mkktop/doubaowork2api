@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>doubaowork2api 控制台</title>
-  <link rel="stylesheet" href="/ui-assets/app.css">
+  <link rel="stylesheet" href="/ui-assets/app.css?v=20261114-automation">
 </head>
 <body>
   <div id="loginView" class="login-shell" hidden>
     <section class="login-story">
-      <span class="eyebrow">LOCAL CONTROL PLANE / 0.1.0</span>
+      <span class="eyebrow">LOCAL CONTROL PLANE / 1.0.0</span>
       <h1>豆包工作版，<br><em>变成一条清晰的 API。</em></h1>
       <p>账号、模型、请求与用量都留在你自己的机器上。没有云端中转，也没有隐藏的凭证上报。</p>
       <div class="story-grid">
-        <div><b>8</b><span>已映射模型</span></div>
+        <div><b>动态</b><span>官方模型目录</span></div>
         <div><b>0</b><span>第三方上传</span></div>
         <div><b>v1</b><span>OpenAI 兼容</span></div>
       </div>
@@ -46,6 +46,9 @@
         <button type="button" class="nav-item" data-tab="analytics">
           <svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg><span>用量</span>
         </button>
+        <button type="button" class="nav-item" data-tab="automation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 10-13h-7l1-7z"/></svg><span>自动化</span>
+        </button>
         <button type="button" class="nav-item" data-tab="settings">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg><span>设置</span>
         </button>
@@ -54,7 +57,7 @@
         </button>
       </nav>
       <div class="sidebar-foot">
-        <a href="https://github.com/ardeyouxipianyi/doubaowork2api" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <a href="https://github.com/niyouqianma/doubaowork2api" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
         <button type="button" id="logoutButton">退出控制台</button>
         <div class="runtime-line"><span class="status-dot"></span>API 服务运行中</div>
       </div>
@@ -70,7 +73,7 @@
           <div><h1 id="pageTitle">总览</h1><p id="pageDescription">账号、请求和网关状态一屏看完。</p></div>
         </div>
         <div class="topbar-actions">
-          <span class="version-pill" id="versionPill">v0.1.0</span>
+          <span class="version-pill" id="versionPill">v1.0.0</span>
           <span class="connection-pill" id="connectionState"><span class="status-dot"></span>已连接</span>
           <button type="button" id="autoRefreshButton" class="button ghost" aria-pressed="false">自动刷新 关</button>
           <button type="button" id="themeButton" class="icon-button" aria-label="切换主题">
@@ -92,69 +95,43 @@
             <article class="metric-card lime"><span>成功请求</span><strong id="metricSuccess">0</strong><small>当前日志窗口</small></article>
           </div>
           <div class="overview-grid">
-            <section class="panel">
-              <div class="panel-heading"><div><span class="eyebrow">TRAFFIC</span><h2>最近请求</h2></div><button class="text-button" data-tab-jump="logs">全部日志 →</button></div>
-              <div id="overviewLogs" class="mini-log-list"></div>
-              <div id="overviewLogsEmpty" class="empty-state" hidden><strong>还没有请求</strong><p>通过 API 或模型测试发起请求后，这里会出现记录。</p></div>
+            <section class="panel overview-requests">
+              <div class="panel-heading"><div><span class="eyebrow">TRAFFIC</span><h2>请求列表</h2></div><button class="text-button" data-tab-jump="logs">全部日志 →</button></div>
+              <div class="table-wrap" id="overviewLogsWrap" role="region" aria-label="最近请求列表" tabindex="0"><table class="data-table data-cards recent-table requests-table"><thead><tr><th scope="col">时间</th><th scope="col">模型</th><th scope="col">推理强度</th><th scope="col">账号</th><th scope="col">API Key</th><th scope="col">模式</th><th scope="col">结果</th><th scope="col">耗时</th><th scope="col">首字</th><th scope="col">速度</th><th scope="col">输入</th><th scope="col">输出</th><th scope="col">思考</th><th scope="col">缓存</th><th scope="col">总 token</th><th scope="col">积分</th><th scope="col">估算价格</th></tr></thead><tbody id="overviewLogs"></tbody></table></div>
+              <p class="muted request-metrics-note">≈ 表示本地 Token 估算；首字包含首段正文或思考输出。缓存、积分与价格未取得官方数据时显示 —。账号测试仅验证首段正文，不计整轮 Token 和速度。</p>
+              <div id="overviewLogsEmpty" class="empty-state" hidden><strong>还没有请求</strong><p>通过 API 发起请求后，这里会出现记录。</p></div>
             </section>
-            <aside class="stack">
+            <aside class="overview-connection">
               <section class="panel">
                 <div class="panel-heading compact"><div><span class="eyebrow">CONNECTION</span><h2>接入信息</h2></div><span class="badge ok">OpenAI v1</span></div>
                 <dl class="detail-list">
                   <div><dt>Base URL</dt><dd><code id="baseUrl">/v1</code></dd></div>
-                  <div><dt>默认模型</dt><dd><code id="defaultModel">deepseek-v4.1-flash</code></dd></div>
+                  <div><dt>默认模型</dt><dd><code id="defaultModel">person-deepseek-v4-1-flash-261017</code></dd></div>
                   <div><dt>鉴权</dt><dd>Bearer / x-api-key</dd></div>
                   <div><dt>控制台鉴权</dt><dd>管理员 Cookie 会话</dd></div>
                 </dl>
               </section>
-              <section class="panel test-panel">
-                <div class="panel-heading compact"><div><span class="eyebrow">SMOKE TEST</span><h2>模型测试</h2></div><span class="badge ok">实时上游</span></div>
-                <form id="chatForm">
-                  <label class="field"><span>测试 API Key（仅用于此请求）</span><input id="chatApiKey" type="password" autocomplete="off" spellcheck="false" required></label>
-                  <label class="field"><span>模型</span><select id="chatModel"></select></label>
-                  <label class="field"><span>思考强度</span><select id="chatReasoning"><option value="">上游默认</option></select></label>
-                  <label class="field"><span>提示词</span><textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea></label>
-                  <div class="field">
-                    <span>图片（可选）</span>
-                    <label class="chat-image-picker">
-                      <input id="chatImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
-                      <span class="chat-image-picker-label">选择图片</span>
-                      <small>PNG / JPEG / WebP / GIF，最多 8 张；单张 ≤ 10 MiB，总计 ≤ 20 MiB。</small>
-                    </label>
-                    <div class="chat-image-toolbar">
-                      <span id="chatImageSummary">未选择图片</span>
-                      <button type="button" class="text-button" id="chatImageClear" disabled>清空</button>
-                    </div>
-                    <ul id="chatImageList" class="chat-image-list" hidden></ul>
-                    <p id="chatImageFeedback" class="form-error" role="status" hidden></p>
-                  </div>
-                  <label class="switch-row"><span><strong>流式返回</strong><small>观察 SSE 增量输出</small></span><input id="streamToggle" type="checkbox"></label>
-                  <button class="button primary wide" type="submit" id="chatSubmit">发送测试请求</button>
-                </form>
-                <div id="chatOutput" class="chat-output" hidden>
-                  <div class="chat-output-head"><span id="chatStatus">等待响应</span><span id="chatLatency"></span></div>
-                  <pre id="chatText"></pre>
-                </div>
-              </section>
             </aside>
           </div>
-          <section id="modelCatalog" aria-label="模型清单">
-          <div class="page-intro">
-            <div><span class="eyebrow">MODEL CATALOG</span><h2>模型清单</h2><p>对外模型名与豆包上游内部键分离；未知模型不会被静默改写。</p></div>
-            <button type="button" class="button secondary" data-action="refresh">刷新目录</button>
-          </div>
-          <div class="catalog-summary">
-            <div><b id="catalogCount">0</b><span>可用模型</span></div>
-            <div><b id="catalogDefault">—</b><span>默认模型</span></div>
-            <div><b>8</b><span>目录映射</span></div>
-            <div><b id="catalogImageCount">0</b><span>已验证识图</span></div>
-          </div>
-          <section class="panel">
-            <div class="panel-heading"><div><span class="eyebrow">ROUTING TABLE</span><h2>模型与上游映射</h2></div><span class="muted small">/v1/models 同源</span></div>
-            <div class="table-wrap">
-              <table class="catalog-table"><thead><tr><th>状态</th><th>对外模型</th><th>显示名称</th><th>倍率</th><th>已核实能力</th><th>上游 model_item_key</th></tr></thead><tbody id="catalogRows"></tbody></table>
+          <section id="modelCatalog" class="panel catalog-panel" aria-labelledby="catalogTitle">
+            <div class="catalog-heading">
+              <div><span class="eyebrow">MODEL CATALOG</span><h2 id="catalogTitle">网关模型清单 <span class="catalog-total"><b id="catalogCount">0</b> 个模型</span></h2><p>豆包原始模型 ID、能力、上下文容量、思考档位与消费倍率。</p></div>
+              <div class="button-row"><span id="catalogSource" class="muted small" role="status"></span><button type="button" class="button secondary" data-action="refresh-catalog">从官方更新目录</button></div>
             </div>
-          </section>
+            <div class="catalog-toolbar" aria-label="模型清单筛选">
+              <input id="catalogSearch" type="search" placeholder="搜索模型 ID、名称或能力" aria-label="搜索模型清单">
+              <span id="catalogFilterCount" class="muted small" role="status" aria-live="polite"></span>
+              <button type="button" class="button ghost" data-action="clear-model-filter">清除筛选</button>
+            </div>
+            <div class="catalog-meta"><span>默认模型：<b id="catalogDefault">—</b></span><span><b id="catalogImageCount">0</b> 个已验证识图</span></div>
+            <div class="table-wrap catalog-table-wrap" tabindex="0" role="region" aria-label="模型能力列表">
+              <table class="catalog-table">
+                <colgroup><col class="catalog-col-id"><col class="catalog-col-name"><col class="catalog-col-rate"><col class="catalog-col-capabilities"><col class="catalog-col-context"><col class="catalog-col-output"><col class="catalog-col-effort"><col class="catalog-col-sampling"><col class="catalog-col-actions"></colgroup>
+                <thead><tr><th scope="col">模型 ID</th><th scope="col">名称</th><th scope="col">消费倍率 / 优惠</th><th scope="col">模型能力</th><th scope="col">上下文窗口</th><th scope="col">最大输出</th><th scope="col">思考档位</th><th scope="col">默认采样参数</th><th scope="col">操作</th></tr></thead>
+                <tbody id="catalogRows"></tbody>
+              </table>
+            </div>
+            <p class="catalog-note">上下文窗口、思考档位与图片能力来自当前模型目录；未公开的最大输出和默认采样参数显示为 —。工具调用由网关文本桥接实现。</p>
           </section>
         </section>
 
@@ -170,20 +147,19 @@
             <article class="metric-card"><span>停用</span><strong id="accountMetricDisabled">0</strong><small>不会接单</small></article>
           </div>
           <section class="panel">
-            <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><span class="muted small">列表不含凭证</span></div>
+            <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><div class="account-actions"><button type="button" class="button secondary" data-action="browser-login">浏览器登录</button><button type="button" class="button primary" data-action="qr-login">扫码添加账号</button></div></div>
             <div class="filter-grid">
-              <label class="field"><span>搜索名称 / ID / 备注 / 分组 / 错误</span><input id="accountSearch" type="search"></label>
-              <label class="field"><span>状态</span><select id="accountStatus"><option value="">全部状态</option><option value="ready">可用</option><option value="busy">请求中</option><option value="cooling">冷却中</option><option value="disabled">已停用</option></select></label>
-              <label class="field"><span>分组</span><select id="accountGroup"><option value="">全部分组</option></select></label>
+              <label class="field"><span>搜索名称 / ID / 备注 / 错误</span><input id="accountSearch" type="search"></label>
+              <label class="field"><span>状态</span><select id="accountStatus"><option value="">全部状态</option><option value="ready">可用</option><option value="busy">请求中</option><option value="cooling">冷却中</option><option value="needs_verification">需官网验证</option><option value="needs_login">需重新登录</option><option value="disabled">已停用</option></select></label>
               <label class="field"><span>错误码</span><select id="accountErrorCode"><option value="">全部错误码</option></select></label>
             </div>
             <div class="selection-toolbar">
               <div class="button-row"><button type="button" class="button secondary" data-action="select-visible">选择当前页</button><button type="button" class="button secondary" data-action="select-results">选择全部筛选结果</button><button type="button" class="button ghost" data-action="clear-selection">清空选择</button></div>
               <p id="selectionSummary" class="muted" role="status"></p>
-              <div class="button-row" id="batchActions"><button type="button" class="button secondary" data-batch="export">导出所选</button><button type="button" class="button secondary" data-batch="enable">启用</button><button type="button" class="button secondary" data-batch="disable">停用</button><button type="button" class="button secondary" data-batch="clear-cooldown">清除冷却</button><button type="button" class="button secondary" data-batch="group">修改分组</button><button type="button" class="button danger" data-batch="delete">删除</button></div>
+              <div class="button-row" id="batchActions"><button type="button" class="button secondary" data-batch="export">导出所选</button><button type="button" class="button secondary" data-batch="enable">启用</button><button type="button" class="button secondary" data-batch="disable">停用</button><button type="button" class="button secondary" data-batch="clear-cooldown">清除冷却</button><button type="button" class="button secondary" data-action="checkin-selected">签到所选</button><button type="button" class="button danger" data-batch="delete">删除</button></div>
               <p id="batchFeedback" class="form-feedback" role="status" hidden></p>
             </div>
-            <div id="accountList" class="account-list"></div>
+            <div class="table-wrap management-table-wrap" id="accountsTableWrap" role="region" aria-label="账号列表" tabindex="0"><table class="data-table data-cards accounts-table"><thead><tr><th scope="col" class="selection-cell"><input id="selectPageAccounts" type="checkbox" aria-label="选择当前页账号"></th><th scope="col">账号</th><th scope="col">状态</th><th scope="col">在途 / 冷却</th><th scope="col">最近错误</th><th scope="col">官方额度 / 签到</th><th scope="col" class="table-actions-heading">操作</th></tr></thead><tbody id="accountList"></tbody></table></div>
             <div id="accountEmpty" class="empty-state" hidden><strong>还没有账号</strong><p>先登录一次豆包工作电脑版并退出，然后点「离线扫描」；也可导入账号 JSON。</p></div>
             <div class="pagination button-row"><button type="button" class="button ghost" id="accountsPrevious">上一页</button><span id="accountsPage" aria-live="polite"></span><button type="button" class="button ghost" id="accountsNext">下一页</button></div>
           </section>
@@ -191,7 +167,7 @@
 
         <section id="page-analytics" class="page">
           <div class="page-intro">
-            <div><span class="eyebrow">USAGE</span><h2>用量与稳定性</h2><p>基于当前进程内的请求元数据聚合，不保存提示词和响应正文。</p></div>
+            <div><span class="eyebrow">USAGE</span><h2>用量与稳定性</h2><p>上方展示最近 200 条请求，下方查询持久历史；不保存提示词和响应正文。</p></div>
             <div class="segmented" id="analyticsRange"><button class="active" data-range="all">全部</button><button data-range="success">成功</button><button data-range="error">失败</button></div>
           </div>
           <div class="metric-grid">
@@ -212,7 +188,62 @@
           </div>
           <section class="panel">
             <div class="panel-heading"><div><span class="eyebrow">BREAKDOWN</span><h2>按模型统计</h2></div></div>
-            <div class="table-wrap"><table><thead><tr><th>模型</th><th>请求</th><th>成功</th><th>失败</th><th>平均耗时</th></tr></thead><tbody id="analyticsRows"></tbody></table></div>
+            <div class="table-wrap" role="region" aria-label="按模型统计" tabindex="0"><table class="data-table data-cards usage-table"><thead><tr><th scope="col">模型</th><th scope="col" class="numeric">请求</th><th scope="col" class="numeric">成功</th><th scope="col" class="numeric">失败</th><th scope="col" class="numeric">成功率</th><th scope="col" class="numeric">平均耗时</th></tr></thead><tbody id="analyticsRows"></tbody></table></div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading"><div><span class="eyebrow">HISTORY</span><h2>历史用量统计</h2></div><span id="historyUsageSummary" class="badge">保留 30 天</span></div>
+            <form id="historyUsageForm" class="filter-bar">
+              <label class="field"><span>时间范围</span><select id="historyDays"><option value="1">最近 1 天</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select></label>
+              <label class="field"><span>统计维度</span><select id="historyDimension"><option value="model">模型</option><option value="account">账号</option><option value="key">API Key</option><option value="day">日期（北京时间）</option></select></label>
+              <button type="submit" class="button secondary">查询历史用量</button>
+              <p id="historyUsageFeedback" class="form-feedback" role="status" hidden></p>
+            </form>
+            <div class="table-wrap" role="region" aria-label="历史用量统计" tabindex="0"><table class="data-table data-cards"><thead><tr><th scope="col">统计对象</th><th scope="col">请求</th><th scope="col">成功</th><th scope="col">失败</th><th scope="col">输入 Token</th><th scope="col">输出 Token</th><th scope="col">平均耗时</th></tr></thead><tbody id="historyUsageRows"></tbody></table></div>
+            <p class="muted small">Token 为官方值与标记估算值的统计，不代表积分账单；日志不保存对话正文。服务重启后继续保留。</p>
+          </section>
+        </section>
+
+        <section id="page-automation" class="page" aria-labelledby="automationTitle">
+          <div class="page-intro">
+            <div><span class="eyebrow">AUTOMATION</span><h2 id="automationTitle">自动化与每日签到</h2><p>管理签到计划，手动补跑，并查看各账号的执行结果。</p></div>
+            <button type="button" class="button secondary" data-action="refresh">刷新记录</button>
+          </div>
+          <div class="metric-grid compact-grid">
+            <article class="metric-card"><span>可执行账号</span><strong id="automationEligibleCount">0</strong><small>已启用且未冷却</small></article>
+            <article class="metric-card lime"><span>今日已确认</span><strong id="automationDoneCount">0</strong><small>官方确认已签到</small></article>
+            <article class="metric-card"><span>待执行 / 回查</span><strong id="automationPendingCount">0</strong><small>可用账号中尚未确认</small></article>
+            <article class="metric-card"><span>需关注</span><strong id="automationAttentionCount">0</strong><small>失败、验证或结果待确认</small></article>
+          </div>
+          <div class="automation-layout">
+            <section class="panel automation-scheduler">
+              <div class="panel-heading"><div><span class="eyebrow">SCHEDULER</span><h2>后台调度器</h2></div><span id="automationSchedulerBadge" class="status-badge disabled">已关闭</span></div>
+              <p id="automationScheduleSummary" class="muted">每日 09:00 · 北京时间</p>
+              <p class="muted">只领取官方明确标识的每日签到奖励。领取前保存提交记录，结果不确定时仅回查；程序需保持运行。</p>
+              <form id="automationForm" class="form-stack">
+                <label class="check-option"><input id="automationEnabled" type="checkbox">启用每日自动签到</label>
+                <label class="field"><span>执行时间（北京时间）</span><input id="automationTime" type="time" value="09:00" required></label>
+                <fieldset class="selector-field"><legend>签到账号</legend><p class="muted small">不选表示全部已启用且未冷却的账号。启动时已过设定时间会补执行当日任务。</p><div id="automationAccounts" class="check-options"></div></fieldset>
+                <p id="automationFeedback" class="form-feedback" role="status" hidden></p>
+                <div class="button-row"><button type="submit" class="button primary">保存签到计划</button><span id="automationUnsaved" class="muted small" hidden>有未保存的修改</span></div>
+              </form>
+            </section>
+            <section class="panel automation-daily">
+              <div class="panel-heading"><div><span class="eyebrow">DAILY CHECK-IN</span><h2>豆包每日签到</h2></div><span id="automationTaskBadge" class="badge">手动执行</span></div>
+              <p class="muted">自动发现当前账号的每日签到任务，领取后回查官方状态。支持单个账号或批量执行。</p>
+              <label class="field"><span>执行范围</span><select id="automationRunAccount" aria-describedby="automationScopeHint"><option value="">全部可用账号</option></select></label>
+              <p id="automationScopeHint" class="muted small">手动执行范围与定时计划分别设置。</p>
+              <div class="button-row automation-run-actions"><button type="button" class="button primary" data-action="run-daily-checkin">一键执行签到</button><button type="button" class="button secondary" data-action="run-unconfirmed-checkin">补跑未确认账号</button></div>
+              <p id="automationRunFeedback" class="form-feedback" role="status" hidden></p>
+              <dl class="detail-list automation-details"><div><dt>最近执行</dt><dd id="automationLastRun">尚未执行</dd></div><div><dt>执行状态</dt><dd id="automationExecutionState">空闲</dd></div></dl>
+              <p class="muted small">今日已确认的账号会跳过重复领取；结果待确认的账号仅回查。</p>
+            </section>
+          </div>
+          <section class="panel automation-records">
+            <div class="panel-heading"><div><span class="eyebrow">ACCOUNT ACTIVITY</span><h2>账号签到记录</h2></div><span id="automationRecordCount" class="muted small" role="status">0 个账号</span></div>
+            <div class="automation-filters"><label class="field"><span>搜索账号或结果</span><input id="automationSearch" type="search" placeholder="名称 / ID / 执行结果"></label><label class="field"><span>今日状态</span><select id="automationStatusFilter"><option value="">全部状态</option><option value="done">已确认</option><option value="unconfirmed">尚未确认</option><option value="attention">需关注</option><option value="running">执行中 / 排队中</option><option value="unavailable">停用 / 冷却</option></select></label></div>
+            <div class="table-wrap" id="automationTableWrap" role="region" aria-label="账号签到记录" tabindex="0"><table class="data-table data-cards automation-table"><thead><tr><th scope="col">账号</th><th scope="col">计划</th><th scope="col">今日状态</th><th scope="col">官方额度</th><th scope="col">最近执行</th><th scope="col">结果说明</th><th scope="col">操作</th></tr></thead><tbody id="automationRows"></tbody></table></div>
+            <div id="automationEmpty" class="empty-state" hidden><strong>暂无账号</strong><p>导入账号后可查看签到状态。</p></div>
+            <p class="muted request-metrics-note">展示每个账号最近一次执行记录；没有今日记录不代表官方未签到，执行时会先查询官方状态。</p>
           </section>
         </section>
 
@@ -233,15 +264,27 @@
                 <label class="field"><span>默认模型</span><select id="settingDefaultModel" required></select></label>
                 <label class="field"><span>请求超时（秒，大于 0）</span><input id="settingTimeout" type="number" min="0.1" step="any" required></label>
                 <label class="field"><span>故障冷却（秒，0 表示不冷却）</span><input id="settingCooldown" type="number" min="0" step="any" required></label>
+                <label class="field"><span>账号级并发上限</span><input id="settingAccountConcurrency" type="number" min="0" max="10" step="1" value="0" aria-describedby="accountConcurrencyHelp" required></label>
+                <p id="accountConcurrencyHelp" class="muted">0 = 不限（默认）；1～10 = 每个账号同时最多接几个请求。全部账号达到上限时不排队，返回繁忙提示；与每个 API Key 的并发限制分别生效。</p>
                 <p id="runtimeFeedback" class="form-feedback" role="status" hidden></p>
                 <button type="submit" class="button primary">保存运行配置</button>
+              </form>
+              <h3>转发策略</h3>
+              <form id="routingForm" class="form-stack">
+                <label class="check-label"><input id="nativeSessions" type="checkbox"><span>复用已验证的上游原生会话</span></label>
+                <p class="muted small">仅历史、账号、Key 和模型一致时复用；不匹配、工具/图片请求及并发冲突会发送完整历史。</p>
+                <label class="field"><span>大请求阈值（字节，0 关闭）</span><input id="largeRequestBytes" type="number" min="0" max="16777216" step="1" required></label>
+                <label class="field"><span>每账号窗口内大请求上限（0 关闭）</span><input id="largeRequestBudget" type="number" min="0" max="1000" step="1" required></label>
+                <label class="field"><span>大请求统计窗口（秒）</span><input id="largeRequestWindow" type="number" min="1" max="86400" step="1" required></label>
+                <p id="routingFeedback" class="form-feedback" role="status" hidden></p>
+                <button type="submit" class="button primary">保存转发策略</button>
               </form>
             </section>
             <section class="panel settings-panel">
               <div class="panel-heading"><div><span class="eyebrow">SECURITY</span><h2>安全边界</h2></div></div>
               <div class="security-note">
-                <strong>凭证只写入本机 <code>accounts/</code></strong>
-                <p>管理员使用 HttpOnly Cookie 会话；API Key 用于模型请求。账号导出文件含凭证，请妥善保管。</p>
+                <strong>凭证加密写入本机 <code>accounts/</code></strong>
+                <p>账号使用 AES-256-GCM 加密，备份目录时请保留 .account-vault.key。管理员使用 HttpOnly Cookie 会话；API Key 用于模型请求。导出的迁移 JSON 含可读凭证，请妥善保管。</p>
               </div>
               <form id="passwordForm" class="form-stack">
                 <label class="field"><span>当前管理员密码</span><input id="currentPassword" type="password" autocomplete="current-password" required></label>
@@ -257,19 +300,29 @@
           <section class="panel">
             <div class="panel-heading"><div><span class="eyebrow">API KEYS</span><h2>API Key 管理</h2></div><button type="button" class="button primary" data-action="create-key">创建 API Key</button></div>
             <p class="muted small">可限制模型、账号及并发数。完整密钥仅创建时显示一次。</p>
-            <div id="keyList" class="key-list"></div><p id="keysEmpty" class="muted" hidden>尚无 API Key，请创建。</p>
+            <div class="table-wrap management-table-wrap" id="keysTableWrap" role="region" aria-label="API Key 列表" tabindex="0"><table class="data-table data-cards keys-table"><thead><tr><th scope="col">名称 / ID</th><th scope="col">状态</th><th scope="col">模型范围</th><th scope="col">账号范围</th><th scope="col" class="numeric">并发上限</th><th scope="col">使用时间</th><th scope="col" class="table-actions-heading">操作</th></tr></thead><tbody id="keyList"></tbody></table></div><p id="keysEmpty" class="table-empty" hidden>尚无 API Key，请创建。</p>
           </section>
         </section>
 
         <section id="page-logs" class="page">
           <div class="page-intro">
-            <div><span class="eyebrow">REQUEST TRACE</span><h2>请求日志</h2><p>仅记录时间、模型、账号、状态与耗时，不记录提示词、响应正文和 Cookie。</p></div>
+            <div><span class="eyebrow">REQUEST TRACE</span><h2>请求日志</h2><p>记录模型、账号、状态、耗时与用量统计，不保存提示词、响应正文和 Cookie。</p></div>
             <div class="button-row"><label class="field"><span>搜索请求日志</span><input id="logSearch" class="search-input" type="search" placeholder="模型 / 账号 / 错误"></label><button type="button" class="button secondary" data-action="refresh">刷新</button></div>
           </div>
           <section class="panel logs-panel">
-            <div class="panel-heading"><div><span class="eyebrow">LIVE WINDOW</span><h2>最近 200 条</h2></div><span class="badge" id="logCountBadge">0 条</span></div>
-            <div class="table-wrap"><table><thead><tr><th>时间</th><th>状态</th><th>模型</th><th>账号</th><th>模式</th><th>耗时</th><th>错误</th></tr></thead><tbody id="logRows"></tbody></table></div>
-            <div id="logEmpty" class="empty-state" hidden><strong>暂无请求</strong><p>通过 API 或模型测试发起请求后会显示在这里。</p></div>
+            <div class="panel-heading"><div><span class="eyebrow">PERSISTENT HISTORY</span><h2>请求记录 · 保留 30 天</h2></div><span class="badge" id="logCountBadge">0 条</span></div>
+            <form id="historyLogForm" class="filter-bar">
+              <label class="field"><span>开始日期</span><input id="historyLogSince" type="date"></label>
+              <label class="field"><span>模型 ID</span><input id="historyLogModel" placeholder="全部模型"></label>
+              <label class="field"><span>账号 ID</span><input id="historyLogAccount" placeholder="全部账号"></label>
+              <label class="field"><span>Key ID</span><input id="historyLogKey" placeholder="全部 Key"></label>
+              <button type="submit" class="button secondary">查询历史</button><button type="button" class="button ghost" data-action="recent-logs">返回最近</button>
+              <p id="historyLogFeedback" class="form-feedback" role="status" hidden></p>
+            </form>
+            <div class="button-row"><button type="button" class="button ghost" data-action="newer-history">较新 200 条</button><button type="button" class="button ghost" data-action="older-history">更早 200 条</button></div>
+            <div class="table-wrap logs-table-wrap" id="logsTableWrap" role="region" aria-label="请求日志列表" tabindex="0"><table class="data-table data-cards logs-table requests-table"><thead><tr><th scope="col">时间</th><th scope="col">模型</th><th scope="col">推理强度</th><th scope="col">账号</th><th scope="col">API Key</th><th scope="col">模式</th><th scope="col">结果</th><th scope="col">耗时</th><th scope="col">首字</th><th scope="col">速度</th><th scope="col">输入</th><th scope="col">输出</th><th scope="col">思考</th><th scope="col">缓存</th><th scope="col">总 token</th><th scope="col">积分</th><th scope="col">估算价格</th><th scope="col">错误详情</th></tr></thead><tbody id="logRows"></tbody></table></div>
+            <div class="pagination button-row"><span id="logsPage" aria-live="polite"></span><button type="button" class="button ghost" id="logsPrevious">上一页</button><button type="button" class="button ghost" id="logsNext">下一页</button></div>
+            <div id="logEmpty" class="empty-state" hidden><strong>暂无请求</strong><p>通过 API 发起请求后会显示在这里。</p></div>
           </section>
         </section>
       </main>
@@ -280,10 +333,38 @@
     <button class="mobile-nav-item active" data-tab="overview"><span>总览</span></button>
     <button class="mobile-nav-item" data-tab="accounts"><span>账号</span></button>
     <button class="mobile-nav-item" data-tab="analytics"><span>用量</span></button>
+    <button class="mobile-nav-item" data-tab="automation"><span>自动化</span></button>
     <button class="mobile-nav-item" data-tab="settings"><span>设置</span></button>
     <button class="mobile-nav-item" data-tab="logs"><span>日志</span></button>
   </nav>
 
+  <dialog id="modelTestDialog" class="dialog" aria-labelledby="modelTestTitle">
+    <div class="dialog-heading"><h2 id="modelTestTitle">测试模型</h2><button type="button" class="icon-button" data-action="close-model-test" aria-label="关闭模型测试">×</button></div>
+    <form id="modelTestForm" class="form-stack">
+      <label class="field"><span>模型 ID</span><input id="testModelId" readonly></label>
+      <label class="field"><span>账号</span><select id="testModelAccount"></select></label>
+      <p class="muted">发送低思考档位的短请求，按官方规则计费，无需 API Key。人工验证账号会等待完整测试结果后再恢复。</p>
+      <p id="modelTestFeedback" class="form-feedback" role="status" hidden></p>
+      <button type="submit" class="button primary">开始测试</button>
+    </form>
+  </dialog>
+  <dialog id="browserDialog" class="dialog" aria-labelledby="browserTitle">
+    <div class="dialog-heading"><h2 id="browserTitle">独立浏览器登录</h2><button type="button" class="icon-button" data-action="cancel-browser" aria-label="取消浏览器登录">×</button></div>
+    <p>请在服务所在电脑新打开的 Chrome / Edge 窗口中登录豆包。此窗口使用独立临时资料，不影响日常浏览器；无桌面服务器请使用扫码或 JSON 导入。</p>
+    <p id="browserFeedback" class="form-feedback" role="status"></p>
+    <div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-browser">取消并关闭</button><button type="button" class="button primary" data-action="finish-browser">完成登录并导入</button></div>
+  </dialog>
+  <dialog id="qrDialog" class="dialog qr-dialog" aria-labelledby="qrTitle">
+    <div class="dialog-heading"><h2 id="qrTitle">扫码添加豆包账号</h2><button type="button" class="icon-button" data-action="close-qr" aria-label="关闭扫码登录">×</button></div>
+    <p class="muted">使用豆包或飞书 App 扫码，并在手机上确认登录。登录成功后自动保存到本地账号池。</p>
+    <div id="qrStage" class="qr-stage" aria-busy="false"><img id="qrImage" width="248" height="248" alt="豆包官方登录二维码" hidden><p id="qrStatus" role="status" aria-live="polite">正在获取二维码…</p></div>
+    <div class="dialog-actions"><button type="button" class="button ghost" data-action="close-qr">关闭</button><button type="button" class="button secondary" data-action="qr-login">刷新二维码</button></div>
+  </dialog>
+  <dialog id="quotaDialog" class="dialog" aria-labelledby="quotaTitle">
+    <div class="dialog-heading"><h2 id="quotaTitle">官方额度与签到</h2><button type="button" class="icon-button" data-close="quotaDialog" aria-label="关闭额度详情">×</button></div>
+    <div id="quotaContent" class="quota-content"></div>
+    <div class="dialog-actions"><button type="button" class="button secondary" data-close="quotaDialog">关闭</button></div>
+  </dialog>
   <dialog id="importDialog" class="dialog" aria-labelledby="importTitle">
     <form id="importForm" method="dialog">
       <div class="dialog-heading"><div><span class="eyebrow">ACCOUNT INGEST</span><h2 id="importTitle">导入账号</h2></div><button type="button" class="icon-button" data-action="close-import" aria-label="关闭">×</button></div>
@@ -301,8 +382,6 @@
       <p id="accountEditId" class="muted small"></p>
       <label class="field"><span>名称</span><input id="accountName" maxlength="200"></label>
       <label class="field"><span>备注</span><textarea id="accountRemark" rows="3" maxlength="2000"></textarea></label>
-      <label class="field"><span>分组（留空为未分组）</span><input id="accountEditGroup" maxlength="200" list="groupSuggestions"></label>
-      <datalist id="groupSuggestions"></datalist>
       <p id="accountFeedback" class="form-feedback" role="status" hidden></p>
       <div class="dialog-actions"><button type="button" class="button ghost" data-close="accountDialog">取消</button><button type="submit" class="button primary">保存账号信息</button></div>
     </form>
@@ -330,13 +409,12 @@
   <dialog id="batchDialog" class="dialog" aria-labelledby="batchTitle">
     <form id="batchForm">
       <h2 id="batchTitle">确认批量操作</h2><p id="batchDescription"></p>
-      <label class="field" id="batchGroupField" hidden><span>目标分组（留空移出分组）</span><input id="batchGroup" maxlength="200" list="groupSuggestions"></label>
       <p id="batchDialogFeedback" class="form-feedback" role="status" hidden></p>
       <div class="dialog-actions"><button type="button" class="button ghost" data-close="batchDialog">取消</button><button type="submit" class="button primary" id="batchConfirm">确认</button></div>
     </form>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/ui-assets/app.js"></script>
+  <script src="/ui-assets/app.js?v=20261114-automation"></script>
 </body>
 </html>

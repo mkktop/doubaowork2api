@@ -47,6 +47,37 @@ def make_pool(tmp_path: Path) -> AccountPool:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_service_records_timing_and_estimated_usage_without_text(tmp_path, streaming):
+    from doubao_work2api.logs import RequestLog
+    transport = FakeTransport([[
+        {"_event": "SSE_HEARTBEAT"},
+        {"_event": "CHUNK_DELTA", "_thinking": True, "text": "private reasoning"},
+        {"_event": "CHUNK_DELTA", "_thinking": False, "text": "private response"},
+    ]])
+    log = RequestLog()
+    service = ChatService(make_pool(tmp_path), transport, model_key="key", app_id="app",
+                          workspace_root=tmp_path, request_log=log)
+    request = ChatCompletionRequest(messages=[{"role": "user", "content": "private prompt"}],
+                                    stream=streaming, reasoning_effort="low")
+    if streaming:
+        chunks = [chunk async for chunk in service.stream(request)]
+        assert chunks[-1] == "data: [DONE]\n\n"
+    else:
+        response = await service.complete(request)
+        assert response["usage"]["is_estimated"]
+    record = log.snapshot()[0]
+    assert record["status"] == "success"
+    assert record["meta"]["reasoning_effort"] == "low"
+    assert record["ttft_ms"] is not None
+    assert record["input_tokens"] > 0 and record["output_tokens"] > 0
+    assert record["reasoning_tokens"] > 0
+    assert record["total_tokens"] == record["input_tokens"] + record["output_tokens"]
+    assert record["usage_estimated"] is True
+    assert "private" not in str(record)
+
+
+@pytest.mark.asyncio
 async def test_service_rotates_to_second_account_on_failure(
     tmp_path: Path,
 ) -> None:

@@ -16,7 +16,7 @@ def test_catalog_public_ids_are_unique() -> None:
 
 
 def test_aliases_resolve_to_public_model() -> None:
-    assert normalize_model("DeepSeek-V4-1-Flash") == "deepseek-v4.1-flash"
+    assert normalize_model("DeepSeek-V4-1-Flash") == "person-deepseek-v4-1-flash-261017"
     assert normalize_model("kimi-k3.1-pro") == "person-kimi-k3-1-pro-261111"
     assert normalize_model("glm-5.3-flash") == "person-glm-5-3-flash-261111"
 
@@ -49,7 +49,7 @@ def test_catalog_contains_observed_model_keys() -> None:
 
 def test_public_capabilities_include_only_verified_values() -> None:
     public = {item["id"]: item for item in (spec.public_dict() for spec in MODEL_CATALOG)}
-    deepseek = public["deepseek-v4.1-flash"]
+    deepseek = public["person-deepseek-v4-1-flash-261017"]
     assert deepseek["context_window"] == 300_000
     assert deepseek["reasoning_efforts"] == [
         "low",

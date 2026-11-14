@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
+from .compatibility import IGNORED_RESPONSE_INCLUDES, without_client_hints
 
 
 class ResponsesConversionError(GatewayError):
@@ -58,6 +59,9 @@ _ALLOWED_TOP_LEVEL = {
     "user",
     "include",
     "truncation",
+    "stream_options",
+    "n",
+    "modalities",
 }
 _KNOWN_UNSUPPORTED_TOP_LEVEL = {
     "access_programs",
@@ -67,15 +71,6 @@ _KNOWN_UNSUPPORTED_TOP_LEVEL = {
     "max_tool_calls",
     "moderation",
     "prompt",
-    "prompt_cache_key",
-    "prompt_cache_options",
-    "prompt_cache_retention",
-    "safety_identifier",
-    "service_tier",
-    "stream_options",
-    "temperature",
-    "top_logprobs",
-    "top_p",
 }
 
 
@@ -129,6 +124,7 @@ def _response_id(value: str | None) -> str:
 
 
 def _validate_payload_shape(payload: dict[str, Any]) -> None:
+    payload = without_client_hints(payload)
     unknown = set(payload) - _ALLOWED_TOP_LEVEL - _KNOWN_UNSUPPORTED_TOP_LEVEL
     if unknown:
         _fail(
@@ -143,6 +139,18 @@ def _validate_payload_shape(payload: dict[str, Any]) -> None:
                 f"{name} is not implemented by this Responses adapter.",
                 "unsupported_parameter",
             )
+    candidates = payload.get('n')
+    if candidates is not None and (type(candidates) is not int or candidates != 1):
+        _fail('Only n=1 is supported; multiple candidates are not implemented.', 'unsupported_parameter')
+    if payload.get('modalities') is not None and payload['modalities'] != ['text']:
+        _fail('Only text output is supported.', 'unsupported_parameter')
+    options = payload.get('stream_options')
+    if options is not None:
+        options = _as_dict(options, 'stream_options', 'invalid_stream_options')
+        if set(options) - {'include_usage'}:
+            _fail('Unsupported stream_options parameter(s).', 'unsupported_parameter')
+        if options.get('include_usage') is not None:
+            _bool(options['include_usage'], 'stream_options.include_usage', 'invalid_stream_options')
     if payload.get("background") is not None:
         if not isinstance(payload["background"], bool):
             _fail("background must be a boolean.", "invalid_background")
@@ -168,6 +176,8 @@ def _validate_include(value: Any) -> list[str]:
         if not isinstance(item, str):
             _fail(f"include[{index}] must be a string.", "invalid_include")
         if item != "reasoning.encrypted_content":
+            if item in IGNORED_RESPONSE_INCLUDES:
+                continue
             _fail(
                 f"include value {item!r} is not implemented.",
                 "unsupported_include",
@@ -275,13 +285,9 @@ def _normalize_reasoning_request(value: Any) -> str | None:
             + ".",
             "unsupported_parameter",
         )
-    for name in ("summary", "generate_summary"):
-        if reasoning.get(name) is not None:
-            _fail(
-                "reasoning summary generation is not supported by the "
-                "Chat conversion.",
-                "unsupported_parameter",
-            )
+    # Clients often request a summary by default. Accept both spellings as
+    # compatibility hints without forwarding them or generating a new summary;
+    # any reasoning actually returned by upstream keeps its existing mapping.
     effort = reasoning.get("effort")
     if effort is None:
         return None
@@ -935,6 +941,7 @@ def responses_to_chat(
 
     if not isinstance(payload, dict):
         _fail("payload must be an object.", "invalid_payload")
+    payload = without_client_hints(payload)
     _validate_payload_shape(payload)
 
     model_value = payload.get("model")

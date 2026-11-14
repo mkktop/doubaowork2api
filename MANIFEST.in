@@ -1,3 +1,6 @@
 include CHANGELOG.md Dockerfile docker-compose.yml .env.example
+include THIRD_PARTY_NOTICES.md
+recursive-include licenses *.txt
 recursive-include scripts *.ps1 *.sh
 recursive-include tests *.py *.js
+recursive-include docs *.md

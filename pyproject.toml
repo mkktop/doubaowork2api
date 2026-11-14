@@ -1,20 +1,24 @@
 [build-system]
-requires = ["setuptools>=75", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "doubaowork2api"
-version = "0.3.0"
+version = "1.0.0"
 description = "Direct, account-pooled OpenAI-compatible gateway for DoubaoWork"
+authors = [{name = "niyouqianma"}]
 readme = "README.md"
+license-files = ["licenses/*.txt", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115",
-  "httpx>=0.28",
+  "httpx[http2]>=0.28",
   "pydantic>=2.10",
   "uvicorn[standard]>=0.34",
   "cryptography>=45",
   "jsonschema>=4.23",
+  "qrcode>=8",
+  "websockets>=13",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +29,11 @@ dev = [
 
 [project.scripts]
 doubaowork2api = "doubao_work2api.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/niyouqianma/doubaowork2api"
+Repository = "https://github.com/niyouqianma/doubaowork2api"
+Issues = "https://github.com/niyouqianma/doubaowork2api/issues"
 
 [tool.setuptools.packages.find]
 include = ["doubao_work2api*"]

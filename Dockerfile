@@ -7,6 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY pyproject.toml README.md CHANGELOG.md ./
+COPY THIRD_PARTY_NOTICES.md ./
+COPY licenses ./licenses
 COPY doubao_work2api ./doubao_work2api
 RUN pip install --no-cache-dir .
 

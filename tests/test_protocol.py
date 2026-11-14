@@ -249,11 +249,11 @@ def test_text_and_input_text_content_are_preserved() -> None:
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("temperature", 0.2),
-        ("top_p", 0.9),
+        ("n", 2),
+        ("n", True),
     ],
 )
-def test_unsupported_sampling_and_limit_parameters_are_rejected(
+def test_multiple_or_invalid_candidate_counts_are_rejected(
     name: str, value
 ) -> None:
     request = make_request(**{name: value})
@@ -262,6 +262,19 @@ def test_unsupported_sampling_and_limit_parameters_are_rejected(
     assert caught.value.status_code == 400
     assert caught.value.code == "unsupported_parameter"
     assert name in caught.value.message
+
+
+@pytest.mark.parametrize('sampling', [
+    {'temperature':0.2}, {'top_p':0.9}, {'temperature':0, 'top_p':1},
+    {'temperature':None, 'top_p':None},
+])
+def test_sampling_parameters_are_accepted_without_upstream_mapping(tmp_path, sampling):
+    import json
+    request = make_request(**sampling)
+    validate_request(request)
+    payload = make_payload(request, tmp_path)
+    encoded = json.dumps(payload)
+    assert '"temperature"' not in encoded and '"top_p"' not in encoded
 
 
 @pytest.mark.parametrize(

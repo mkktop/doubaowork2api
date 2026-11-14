@@ -37,6 +37,12 @@ class NoAvailableAccountError(GatewayError):
     code = "no_available_account"
 
 
+class AccountBusyError(NoAvailableAccountError):
+    status_code = 429
+    error_type = "rate_limit_error"
+    code = "account_concurrency_limit"
+
+
 class UnknownModelError(GatewayError):
     status_code = 400
     error_type = "invalid_request_error"

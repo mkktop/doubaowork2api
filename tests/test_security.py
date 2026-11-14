@@ -196,6 +196,7 @@ def test_last_used_writes_are_coalesced_per_key(store, monkeypatch) -> None:
 def test_restart_preserves_latest_last_used_after_a_full_save(store, settings, monkeypatch) -> None:
     now = [2000.0]
     monkeypatch.setattr(security.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(security, '_timestamp', lambda: f'2026-11-14T00:00:{int(now[0]-2000):02d}+00:00')
     created = store.create_key({"name": "restart"})
     first = store.authenticate_api(created["key"])
     now[0] += 1
@@ -213,6 +214,9 @@ def test_restart_preserves_latest_last_used_after_a_full_save(store, settings, m
 def test_other_saves_flush_latest_last_used(store, settings, monkeypatch, operation) -> None:
     now = [3000.0]
     monkeypatch.setattr(security.time, "monotonic", lambda: now[0])
+    # Windows wall-clock precision can return identical timestamps for two
+    # consecutive calls. Advance both clocks used by this persistence test.
+    monkeypatch.setattr(security, '_timestamp', lambda: f'2026-11-14T00:00:{int(now[0]-3000):02d}+00:00')
     created = store.create_key({"name": "flush"})
     first = store.authenticate_api(created["key"])
     now[0] += 1
@@ -273,6 +277,7 @@ def test_runtime_defaults_partial_updates_and_restart(store, settings) -> None:
         "default_model": settings.default_model,
         "timeout_seconds": settings.request_timeout_seconds,
         "cooldown_seconds": settings.cooldown_seconds,
+        "account_max_concurrent": 0,
     }
     public = store.runtime
     public["default_model"] = "mutated"
@@ -287,6 +292,18 @@ def test_runtime_defaults_partial_updates_and_restart(store, settings) -> None:
     assert store.update_runtime({}) == store.runtime
 
 
+def test_legacy_settings_gain_unlimited_account_cap_without_resetting_secrets(store, settings):
+    original = json.loads(store.path.read_text(encoding="utf-8"))
+    original["runtime"].pop("account_max_concurrent")
+    store.path.write_text(json.dumps(original), encoding="utf-8")
+    migrated = SecurityStore(settings)
+    result = json.loads(store.path.read_text(encoding="utf-8"))
+    assert result["runtime"].pop("account_max_concurrent") == 0
+    assert result == original
+    assert migrated.verify_admin(settings.admin_password)
+    assert migrated.authenticate_api(settings.api_key) is not None
+
+
 @pytest.mark.parametrize("patch", [
     None, [], {"unknown": 1}, {"admin_password": "forbidden"},
     {"default_model": ""}, {"default_model": "  "}, {"default_model": 12},
@@ -298,6 +315,9 @@ def test_runtime_defaults_partial_updates_and_restart(store, settings) -> None:
     {"cooldown_seconds": True}, {"cooldown_seconds": -1},
     {"cooldown_seconds": 1.5}, {"cooldown_seconds": "60"},
     {"cooldown_seconds": 86401},
+    {"account_max_concurrent": True}, {"account_max_concurrent": -1},
+    {"account_max_concurrent": 11}, {"account_max_concurrent": 1.5},
+    {"account_max_concurrent": "2"}, {"account_max_concurrent": None},
     {"default_model": "valid-change", "timeout_seconds": 0},
 ])
 def test_runtime_validation_has_no_partial_effect(store, patch) -> None:
@@ -393,6 +413,7 @@ def test_concurrent_key_and_runtime_writes_do_not_lose_changes(store, settings) 
     assert {record["id"] for record in reopened.list_keys()} >= set(ids)
     assert reopened.runtime == {
         "default_model": "concurrent-model", "timeout_seconds": 7.5, "cooldown_seconds": 11,
+        "account_max_concurrent": 0,
     }
     assert not list(store.path.parent.glob(".settings-*.tmp"))
 

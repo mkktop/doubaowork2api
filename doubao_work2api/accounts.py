@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import tempfile
 import time
@@ -11,7 +12,8 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
-from .errors import NoAvailableAccountError
+from .errors import AccountBusyError, NoAvailableAccountError
+from .vault import AccountVault, FORMAT as VAULT_FORMAT
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +36,24 @@ class Account:
     group: str = ""
     error_code: str = ""
     last_error_at: float = 0.0
+    identity_id: str = ''
+    app_id: str = ''
+    client_profile: str = 'desktop'
+    client_version: str = ''
+    fingerprint: str = ''
+    user_agent: str = ''
 
     @property
     def available(self) -> bool:
-        return self.enabled and self.cooldown_until <= time.time()
+        return self.enabled and not self.failure_type and self.cooldown_until <= time.time()
+
+    @property
+    def failure_type(self):
+        if self.error_code in {'403','412','710022002','710022004','712010702'}:
+            return 'needs_verification'
+        if self.error_code in {'401','710012001'}:
+            return 'needs_login'
+        return ''
 
     def cooldown(self, seconds: int, reason: str, error_code: str = "") -> None:
         self.cooldown_until = max(self.cooldown_until, time.time() + seconds)
@@ -53,7 +69,9 @@ class Account:
 
     def public_dict(self) -> dict[str, Any]:
         remaining = max(0, int(self.cooldown_until - time.time()))
-        if not self.enabled:
+        if self.failure_type:
+            state = self.failure_type
+        elif not self.enabled:
             state = "disabled"
         elif remaining:
             state = "cooling"
@@ -69,6 +87,7 @@ class Account:
             "enabled": self.enabled,
             "available": self.available,
             "state": state,
+            "failure_type": self.failure_type,
             "cooldown_remaining_seconds": remaining,
             "last_error": self.last_error,
             "error_code": self.error_code,
@@ -93,6 +112,7 @@ class Account:
             "error_code": self.error_code,
             "last_error_at": self.last_error_at,
             "cookies": dict(self.cookies),
+            **{key: getattr(self, key) for key in ('identity_id', 'app_id', 'client_profile', 'client_version', 'fingerprint', 'user_agent')},
         }
 
 
@@ -139,6 +159,16 @@ def _document_fields(document: Any) -> dict[str, Any]:
     source = document.get("account")
     if isinstance(source, dict):
         document = {**document, **source}
+    session = document.get('session')
+    if isinstance(session, dict):
+        document = {**document, **session}
+    aliases = {'cookieHeader': 'cookie', 'deviceId': 'device_id', 'webId': 'web_id',
+               'userAgent': 'user_agent', 'appId': 'app_id', 'clientProfile': 'client_profile',
+               'clientVersion': 'client_version'}
+    document = dict(document)
+    for old, new in aliases.items():
+        if old in document and new not in document:
+            document[new] = document[old]
     return document
 
 
@@ -202,6 +232,8 @@ def parse_account_document(document: Any) -> Account:
         last_error=str(document.get("last_error") or ""),
         error_code=str(document.get("error_code") or ""),
         last_error_at=float(document.get("last_error_at") or 0),
+        **{key: str(document.get(key) or ('desktop' if key == 'client_profile' else ''))[:512]
+           for key in ('identity_id', 'app_id', 'client_profile', 'client_version', 'fingerprint', 'user_agent')},
     )
 
 
@@ -211,9 +243,11 @@ class AccountPool:
         accounts_dir: Path,
         *,
         cooldown_seconds: int = 60,
+        account_max_concurrent: int = 0,
     ) -> None:
         self.accounts_dir = accounts_dir
         self.cooldown_seconds = cooldown_seconds
+        self.account_max_concurrent = account_max_concurrent
         self._accounts: list[Account] = []
         self._index = 0
         self._lock = asyncio.Lock()
@@ -227,11 +261,15 @@ class AccountPool:
         loaded: list[Account] = []
         seen: set[str] = set()
         for path in sorted(self.accounts_dir.glob("*.json")):
+            encrypted = False
             try:
                 document = json.loads(path.read_text(encoding="utf-8"))
-                account = parse_account_document(document)
+                encrypted = isinstance(document, dict) and document.get('format') == VAULT_FORMAT
+                account = parse_account_document(AccountVault(self.accounts_dir).decode(document))
                 account.source_path = path
             except Exception as exc:
+                if encrypted:
+                    raise ValueError(f'加密账号文件无法读取：{path.name}；原文件保留。') from exc
                 logger.warning("Skipping account file %s: %s", path.name, exc)
                 continue
             if account.id in seen:
@@ -239,6 +277,12 @@ class AccountPool:
                 continue
             seen.add(account.id)
             loaded.append(account)
+        # Validate every encrypted document before generating any new key or
+        # replacing legacy files. In particular, never mask a missing key.
+        for account in loaded:
+            raw = json.loads(account.source_path.read_text(encoding='utf-8'))
+            if not isinstance(raw,dict) or raw.get('format') != VAULT_FORMAT:
+                self._write(account)
         self._accounts = loaded
         self._index = 0
         logger.info("Loaded %d Doubao account(s)", len(loaded))
@@ -250,7 +294,7 @@ class AccountPool:
             None,
         )
 
-    async def acquire(self, *, allowed_ids: set[str] | None = None) -> Account:
+    async def acquire(self, *, allowed_ids: set[str] | None = None, preferred_id: str | None = None, verification_id: str | None = None) -> Account:
         async with self._lock:
             if not self._accounts:
                 raise NoAvailableAccountError(
@@ -266,7 +310,7 @@ class AccountPool:
             candidates = [
                 account
                 for account in eligible
-                if account.available and account.in_flight == 0
+                if (account.available or (account.id == verification_id and account.enabled and account.failure_type == 'needs_verification')) and (self.account_max_concurrent == 0 or account.in_flight < self.account_max_concurrent)
             ]
             if not candidates:
                 enabled = [account for account in eligible if account.enabled]
@@ -274,14 +318,24 @@ class AccountPool:
                     raise NoAvailableAccountError(
                         "All configured Doubao accounts are disabled."
                     )
+                if any(account.failure_type for account in enabled):
+                    raise NoAvailableAccountError('账号需要重新登录或官网人工验证；处理后请复测指定账号。',code='account_requires_action')
+                if any(account.available for account in enabled):
+                    raise AccountBusyError(
+                        f"All usable Doubao accounts are busy (per-account concurrency limit: {self.account_max_concurrent}); wait for an active request to finish or raise the cap."
+                    )
                 wait = min(
-                    max(0, int(account.cooldown_until - time.time()))
+                    max(1, math.ceil(account.cooldown_until - time.time()))
                     for account in enabled
                 )
                 raise NoAvailableAccountError(
-                    f"All Doubao accounts are busy or cooling down; "
-                    f"retry in about {wait}s."
+                    f"All enabled Doubao accounts are cooling down; retry in about {wait}s.",
+                    code="account_cooling_down",
                 )
+            preferred = next((account for account in candidates if account.id == preferred_id), None)
+            if preferred is not None:
+                preferred.in_flight += 1
+                return preferred
             for offset in range(len(self._accounts)):
                 index = (self._index + offset) % len(self._accounts)
                 account = self._accounts[index]
@@ -302,7 +356,11 @@ class AccountPool:
         candidate.cooldown(self.cooldown_seconds, reason, error_code)
         self._persist_update(account, candidate)
 
-    def mark_success(self, account: Account) -> None:
+    def mark_success(self, account: Account, *, started_at: float | None = None) -> None:
+        # A concurrent request's later failure must survive this request's
+        # success; otherwise a cooldown/verification warning could disappear.
+        if started_at is not None and (not account.enabled or account.last_error_at > started_at):
+            return
         if account.cooldown_until or account.last_error or account.error_code or account.last_error_at:
             candidate = replace(account)
             candidate.clear_error()
@@ -314,6 +372,8 @@ class AccountPool:
         async with self._lock:
             supplied_id = str(document.get("id") or document.get("account_id") or "").strip()
             existing = self.find(supplied_id) if supplied_id else None
+            if existing is None and incoming.identity_id:
+                existing = next((a for a in self._accounts if a.identity_id == incoming.identity_id), None)
             identity = _session_identity(incoming.cookies)
             if existing is None and identity is not None:
                 existing = next(
@@ -334,7 +394,7 @@ class AccountPool:
                 device_id=incoming.device_id or existing.device_id,
                 web_id=incoming.web_id or existing.web_id,
             )
-            for name in ("name", "remark", "group", "enabled", "device_name"):
+            for name in ("name", "remark", "group", "enabled", "device_name", 'identity_id', 'app_id', 'client_profile', 'client_version', 'fingerprint', 'user_agent'):
                 if name in document:
                     setattr(candidate, name, getattr(incoming, name))
             candidate.clear_error()
@@ -459,7 +519,7 @@ class AccountPool:
         path = account.source_path
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
-            account.to_document(),
+            AccountVault(self.accounts_dir).encode(account.to_document()),
             ensure_ascii=False,
             indent=2,
         )
