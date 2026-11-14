@@ -3,6 +3,20 @@ from __future__ import annotations
 from doubao_work2api.logs import RequestLog
 
 
+def test_sqlite_handles_are_released_without_waiting_for_garbage_collection():
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory(prefix='doubaowork-log-handles-') as directory:
+        path=Path(directory)/'requests.sqlite3'
+        log=RequestLog(path=path)
+        entry=log.start(model='synthetic',stream=False)
+        log.account(entry,'account')
+        log.success(entry)
+        assert log.snapshot()[0]['status']=='success'
+        assert log.analytics(7)['by_model'][0]['requests']==1
+    assert not path.exists()
+
+
 def test_request_log_keeps_metadata_not_prompt() -> None:
     log = RequestLog(capacity=2)
     entry = log.start(model="deepseek-v4.1-flash", stream=False)

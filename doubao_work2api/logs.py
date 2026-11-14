@@ -5,6 +5,7 @@ import uuid
 import json
 import sqlite3
 import threading
+from contextlib import closing
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
@@ -69,7 +70,7 @@ class RequestLog:
         self._writes = 0
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute('PRAGMA journal_mode=WAL')
                 db.execute('CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, at REAL, model TEXT, account TEXT, key_id TEXT, status TEXT, body TEXT)')
                 db.execute('CREATE INDEX IF NOT EXISTS requests_time ON requests(at)')
@@ -90,7 +91,7 @@ class RequestLog:
         value = entry.public_dict()
         value['meta'] = {key:item for key,item in value['meta'].items()
             if key in {'messages','key_id','reasoning_effort','native_reused','usage_source'}}
-        with self._lock, sqlite3.connect(self.path) as db:
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
             db.execute('INSERT OR REPLACE INTO requests VALUES (?,?,?,?,?,?,?)',
                 (entry.id, entry.started_at, entry.model, entry.account_id,
                  str(value['meta'].get('key_id','')), entry.status, json.dumps(value, ensure_ascii=False)))
@@ -140,7 +141,7 @@ class RequestLog:
             for name, value in [('model',model),('account',account_id),('key_id',key_id)]:
                 if value:
                     filters.append(name+'=?'); values.append(value)
-            with self._lock, sqlite3.connect(self.path) as db:
+            with self._lock, closing(sqlite3.connect(self.path)) as db, db:
                 rows = db.execute('SELECT body FROM requests WHERE '+' AND '.join(filters)+' ORDER BY at DESC LIMIT ? OFFSET ?',
                     values + [max(1,min(limit,200)), max(0,offset)]).fetchall()
             active = {entry.id:entry.public_dict() for entry in self._entries if entry.status=='running'}
@@ -154,7 +155,7 @@ class RequestLog:
         if not self.path:
             return {'days':days,'by_model':[],'by_account':[],'by_key':[],'by_day':[]}
         result = {'days':days}
-        with self._lock, sqlite3.connect(self.path) as db:
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
             for name, column in [('model','model'),('account','account'),('key','key_id'),('day',"date(at,'unixepoch','+8 hours')")]:
                 rows = db.execute(f"SELECT {column},COUNT(*),SUM(status='success'),SUM(status IN ('error','interrupted')),AVG(CASE WHEN status!='running' THEN json_extract(body,'$.duration_ms') END),SUM(COALESCE(json_extract(body,'$.input_tokens'),0)),SUM(COALESCE(json_extract(body,'$.output_tokens'),0)) FROM requests WHERE at>=? GROUP BY {column} ORDER BY COUNT(*) DESC", (time.time()-days*86400,)).fetchall()
                 result['by_'+name] = [dict(zip(['id','requests','success','errors','average_ms','input_tokens','output_tokens'], row)) for row in rows]
