@@ -78,6 +78,8 @@ _KNOWN_UNSUPPORTED_TOP_LEVEL = {
 
 
 def _fail(message: str, code: str = "invalid_responses_request") -> None:
+    if code in {"invalid_tools", "invalid_tool_name", "duplicate_tool", "unsupported_tool"}:
+        logger.warning("responses tool rejection (%s): %s", code, message)
     raise ResponsesConversionError(message, code=code)
 
 

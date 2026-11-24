@@ -177,7 +177,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return principal
 
     @app.exception_handler(GatewayError)
-    async def gateway_error_handler(_: Request, exc: GatewayError):
+    async def gateway_error_handler(request: Request, exc: GatewayError):
+        logger.warning(
+            "request failed: %s %s -> %s %s",
+            request.method, request.url.path, exc.code, exc.message,
+        )
         return JSONResponse(status_code=exc.status_code, content=exc.as_openai())
 
     @app.exception_handler(ValueError)
