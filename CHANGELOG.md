@@ -1,5 +1,13 @@
 # 版本说明
 
+## v1.0.4 · 2026-11-24
+
+修复账号状态竞态与面板复制按钮，补齐 Windows 时钟精度与换行符相关的稳定性问题。
+
+- **账号状态竞态**：`mark_success` 用严格 `>` 比较失败时间与请求开始时间。Windows Python 3.10 的 `time.time()` 精度约 15.6ms，两者可能落在同一刻度而判定失败「更早」，成功回调会清掉刚记录的 429 / 需验证标记。改为 `>=`，并新增同刻度回归测试。
+- **面板复制按钮在 HTTP 下无效**：`navigator.clipboard` 仅在安全上下文（HTTPS / localhost）可用，通过 `http://host:18789` 访问时模型 ID 与 API Key 的复制按钮点击无反应。新增 `copyText()`：安全上下文用原生 Clipboard API，否则降级为隐藏 textarea + `execCommand('copy')`。
+- **换行符**：新增 `.gitattributes`（`* text=auto eol=lf`），避免 Windows 检出把文件转成 CRLF 导致整文件假差异。
+
 ## v1.0.3 · 2026-11-24
 
 降低扫码登录触发官方 passport 限流（错误码 7「访问太频繁」）的概率，并在被限流时避免持续请求扩大封禁窗口。
