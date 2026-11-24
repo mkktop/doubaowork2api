@@ -36,7 +36,18 @@ def test_unknown_model_window_is_not_invented():
     assert apply_context_budget(request).gateway_context["window"] is None
 
 
-def test_output_budget_is_reserved_before_dispatch():
+def test_window_sized_max_tokens_does_not_block_large_prompt():
+    # ZCode sends max_tokens near the whole window (e.g. 288471) to mean
+    # "as much as possible"; the reservation must not starve the prompt.
+    request = ChatCompletionRequest(messages=[{"role": "user", "content": "x" * 248000}], max_tokens=288471)
+    bounded = apply_context_budget(request)
+    assert bounded.gateway_context["requested_output_tokens"] == 288471
+    assert bounded.gateway_context["reserved_output_tokens"] == 32768
+    assert bounded.gateway_context["estimated_input_tokens"] > 248000
+
+
+def test_output_reservation_is_capped_before_dispatch():
     request = ChatCompletionRequest(messages=[{"role": "user", "content": "x" * 10000}], max_completion_tokens=290000)
-    with pytest.raises(ContextLengthError):
-        apply_context_budget(request)
+    bounded = apply_context_budget(request)
+    assert bounded.gateway_context["reserved_output_tokens"] == 32768
+    assert bounded.gateway_context["requested_output_tokens"] == 290000

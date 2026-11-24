@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from .catalog import request_model
@@ -48,14 +49,24 @@ def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionReques
     spec = request_model(request)
     window = spec.context_window if spec else None
     estimated = estimate_request_tokens(request)
-    output = get_output_limit(request) or 4096
+    requested_output = get_output_limit(request) or 4096
+    # Clients such as ZCode send max_tokens near the whole context window
+    # (e.g. 288471) to mean "as much as possible". The gateway does not pass
+    # max_tokens upstream, it only truncates locally, so reserving the full
+    # number leaves almost no room for the actual prompt. Reserve a realistic
+    # output budget instead; override with DOUBAO_WORK_OUTPUT_RESERVE_CAP.
+    try:
+        output_cap = int(os.getenv("DOUBAO_WORK_OUTPUT_RESERVE_CAP", "32768"))
+    except ValueError:
+        output_cap = 32768
+    output = min(requested_output, max(1024, output_cap))
     # The live channel reports a server system prompt around 6K tokens.
     # Reserve more, rather than claiming all of the 300K belongs to the user.
     reserve = 8192
     old = getattr(request, "gateway_context", {})
     previous_dropped = old.get("dropped_turns", 0) if isinstance(old, dict) else 0
     previous_dropped = previous_dropped if type(previous_dropped) is int and previous_dropped >= 0 else 0
-    metadata: dict[str, Any] = {"estimated_input_tokens": estimated, "reserved_output_tokens": output, "server_reserve": reserve, "window": window, "dropped_turns": previous_dropped, "is_estimated": True}
+    metadata: dict[str, Any] = {"estimated_input_tokens": estimated, "reserved_output_tokens": output, "requested_output_tokens": requested_output, "server_reserve": reserve, "window": window, "dropped_turns": previous_dropped, "is_estimated": True}
     if window is None:
         return request.model_copy(update={"gateway_context": metadata})
     available = window - reserve - output
