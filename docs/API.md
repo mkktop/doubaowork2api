@@ -190,6 +190,8 @@ OpenAI 图片 token 计价。响应 `usage` 中的图片部分仅为固定预算
 | `DOUBAO_WORK_DATA_DIR` | `data` | 工作区等运行时数据 |
 | `DOUBAO_WORK_TIMEOUT` | `180` | 单次上游请求超时秒数 |
 | `DOUBAO_WORK_COOLDOWN_SECONDS` | `60` | 限流/故障冷却秒数 |
+| `DOUBAO_WORK_OUTPUT_RESERVE_CAP` | `32768` | 上下文预算里最多预留多少输出 token（客户端把 `max_tokens` 填成整个窗口时靠它兜底） |
+| `DOUBAO_WORK_CONTEXT_BYTE_CAP` | `0` | 用字节数覆盖模型声明的上下文窗口，`0` 表示沿用目录值。实测该通道 568 KB 可通过、820 KB 被上游拒绝（710020202）并冷却账号，所以 300000 不是字节硬上限 |
 
 设置保存在 `data/settings.json`。首次初始化时环境变量中的 API Key 会导入为
 默认 Key；后续以持久化设置为准，停用或删除后不会因重启恢复。

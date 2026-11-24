@@ -73,3 +73,13 @@ def test_breakdown_attributes_most_bytes_to_a_large_tool_declaration():
     assert breakdown["tools_declared"] == 50
     assert breakdown["tools"] > 100000
     assert breakdown["tools"] > breakdown["messages"] * 100
+
+
+def test_byte_cap_raises_the_declared_window(monkeypatch):
+    # The live channel accepted 568 KB while the catalog declares 300000, so
+    # the operator can calibrate the byte gate without editing the catalog.
+    monkeypatch.setenv("DOUBAO_WORK_CONTEXT_BYTE_CAP", "512000")
+    request = ChatCompletionRequest(messages=[{"role": "user", "content": "x" * 300000}])
+    bounded = apply_context_budget(request)
+    assert bounded.gateway_context["window"] == 512000
+    assert bounded.gateway_context["declared_window"] == 300000

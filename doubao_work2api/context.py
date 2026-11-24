@@ -72,6 +72,19 @@ def estimate_request_tokens(request: ChatCompletionRequest) -> int:
 def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionRequest:
     spec = request_model(request)
     window = spec.context_window if spec else None
+    # The declared window is not a byte ceiling. Measured on the live channel
+    # for person-deepseek-v4-1-flash-261017: a 568 KB prompt was accepted in
+    # 23 s, while 820 KB was rejected upstream (710020202) and put the account
+    # into cooldown. The local estimate counts UTF-8 bytes, so an operator can
+    # calibrate the gate with DOUBAO_WORK_CONTEXT_BYTE_CAP without editing the
+    # catalog. 0 keeps the declared window.
+    declared_window = window
+    try:
+        byte_cap = int(os.getenv("DOUBAO_WORK_CONTEXT_BYTE_CAP", "0"))
+    except ValueError:
+        byte_cap = 0
+    if window is not None and byte_cap > 0:
+        window = byte_cap
     parts = estimate_request_parts(request)
     estimated = parts["messages"] + parts["tools"] + parts["contract"] + parts["images"]
     # Only the message history is truncated later; the rest is fixed per turn.
@@ -93,7 +106,7 @@ def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionReques
     old = getattr(request, "gateway_context", {})
     previous_dropped = old.get("dropped_turns", 0) if isinstance(old, dict) else 0
     previous_dropped = previous_dropped if type(previous_dropped) is int and previous_dropped >= 0 else 0
-    metadata: dict[str, Any] = {"estimated_input_tokens": estimated, "reserved_output_tokens": output, "requested_output_tokens": requested_output, "server_reserve": reserve, "window": window, "dropped_turns": previous_dropped, "estimated_breakdown": parts, "is_estimated": True}
+    metadata: dict[str, Any] = {"estimated_input_tokens": estimated, "reserved_output_tokens": output, "requested_output_tokens": requested_output, "server_reserve": reserve, "window": window, "declared_window": declared_window, "dropped_turns": previous_dropped, "estimated_breakdown": parts, "is_estimated": True}
     if window is None:
         if estimated >= 100_000:
             logger.info("context budget: %d estimated (messages %d, tools %d in %d declarations, contract %d, images %d); window unknown", estimated, parts["messages"], parts["tools"], parts["tools_declared"], parts["contract"], parts["images"])
@@ -104,10 +117,11 @@ def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionReques
     if estimated <= available:
         return request.model_copy(update={"gateway_context": metadata})
     if request.truncation != "auto":
+        budget = f"window {window}" if window == declared_window else f"window {window} bytes (declared {declared_window})"
         raise ContextLengthError(
             "Estimated context exceeds the verified model window: "
             f"{estimated} bytes estimated, {available} bytes available "
-            f"(window {window}, reserved output {output}, server reserve {reserve}). "
+            f"({budget}, reserved output {output}, server reserve {reserve}). "
             f"Of the estimate, tools account for {parts['tools']} bytes in "
             f"{parts['tools_declared']} declarations and messages for "
             f"{parts['messages']} bytes. "
