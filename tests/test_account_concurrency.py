@@ -169,3 +169,18 @@ async def test_concurrent_success_does_not_erase_later_failure(tmp_path, disable
     assert account.enabled is (not disable)
     assert not account.available
     assert account.in_flight == 0
+
+
+async def test_success_keeps_failure_recorded_in_same_clock_tick(tmp_path):
+    # Windows Python 3.10 time.time() has ~15.6 ms granularity: a failure
+    # recorded right after a request starts can carry the same timestamp.
+    # The later failure must still survive the success.
+    pool = AccountPool(tmp_path)
+    account = Account(id="one", cookies={}, device_id="one", web_id="one")
+    pool._accounts = [account]
+    stamp = 1_765_000_000.0
+    account.cooldown(60, "later request failed", "429")
+    account.last_error_at = stamp
+    pool.mark_success(account, started_at=stamp)
+    assert account.error_code == "429"
+    assert account.last_error
