@@ -61,7 +61,7 @@ _MARKDOWN_FENCE = re.compile(
     r"\A\s*```(?:json)?[ \t]*\r?\n.*?\r?\n```\s*\Z",
     re.DOTALL | re.IGNORECASE,
 )
-_MAX_TOOLS = 128
+_MAX_TOOLS = 256
 _MAX_HISTORY_CALLS = 128
 _MAX_PARALLEL_CALLS = 16
 _MAX_ARGUMENT_BYTES = 1_048_576
