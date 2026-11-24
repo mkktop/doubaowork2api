@@ -30,7 +30,11 @@ class ToolBridgeResponseError(GatewayError):
 class _ToolFunctionDefinition(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    name: str = Field(min_length=1, max_length=64)
+    # MCP clients expose qualified names such as
+    # mcp__plugin_tianyancha_tianyancha__get_high_consumption_restriction,
+    # which exceed OpenAI's 64-character limit. Tool calls are bridged as
+    # text here, so accept longer names instead of failing the whole turn.
+    name: str = Field(min_length=1, max_length=200)
     description: str | None = None
     parameters: dict[str, Any] | None = None
     strict: bool | None = None
@@ -59,7 +63,7 @@ class _ToolEnvelope(BaseModel):
 
 
 _ENVELOPE_START = '{"type":"tool_calls","tool_calls":'
-_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 _MARKDOWN_FENCE = re.compile(
     r"\A\s*```(?:json)?[ \t]*\r?\n.*?\r?\n```\s*\Z",
     re.DOTALL | re.IGNORECASE,

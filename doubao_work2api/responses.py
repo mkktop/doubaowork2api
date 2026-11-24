@@ -43,7 +43,7 @@ _REASONING_EFFORTS = {
 }
 _IMAGE_DETAILS = {"auto", "low", "high", "original"}
 _ROLES = {"system", "developer", "user", "assistant"}
-_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 _ALLOWED_TOP_LEVEL = {
     "model",
     "input",

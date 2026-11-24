@@ -513,3 +513,17 @@ def test_render_history_missing_empty_arguments_become_object_string() -> None:
     history = render_tool_history(assistant)
     assert history is not None
     assert json.loads(history)["tool_calls"][0]["function"]["arguments"] == "{}"
+
+
+def test_validate_tools_accepts_long_mcp_qualified_names() -> None:
+    # ZCode exposes MCP tools as mcp__plugin_<server>__<tool>, which can
+    # exceed OpenAI's 64-character limit; the text bridge must accept them.
+    long_name = "mcp__plugin_tianyancha_tianyancha__get_high_consumption_restriction"
+    assert len(long_name) > 64
+    from doubao_work2api.tool_bridge import _normalize_tools
+
+    tools = _normalize_tools(
+        [{"type": "function", "function": {"name": long_name,
+                                            "parameters": {"type": "object"}}}]
+    )
+    assert tools[0]["function"]["name"] == long_name
