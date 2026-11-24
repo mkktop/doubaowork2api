@@ -122,6 +122,44 @@ function showToast(message) {
   state.toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
 }
 
+// navigator.clipboard only exists in secure contexts (HTTPS or localhost).
+// The panel is usually served over plain HTTP, so fall back to the legacy
+// textarea + execCommand path instead of failing silently.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      // fall through to the legacy path
+    }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  area.style.left = "-1000px";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  const selection = document.getSelection();
+  const saved = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (error) {
+    copied = false;
+  }
+  document.body.removeChild(area);
+  if (saved && selection) {
+    selection.removeAllRanges();
+    selection.addRange(saved);
+  }
+  return copied;
+}
+
 function showLogin(message = "") {
   appView.hidden = true;
   loginView.hidden = false;
@@ -364,10 +402,8 @@ function renderCatalogTable() {
 async function copyModelId(button) {
   button.disabled = true;
   try {
-    await navigator.clipboard.writeText(button.dataset.id);
-    showToast("模型 ID 已复制");
-  } catch {
-    showToast("无法自动复制，请选中模型 ID 后手动复制。");
+    if (await copyText(button.dataset.id)) showToast("模型 ID 已复制");
+    else showToast("无法自动复制，请选中模型 ID 后手动复制。");
   } finally {
     button.disabled = false;
   }
@@ -1080,8 +1116,11 @@ bindForm("#keyForm", "#keyFeedback", async () => {
 });
 $("#keySecretDialog").addEventListener("close", () => { $("#newKeySecret").value = ""; feedback("#copyFeedback"); });
 $("#copyKey").addEventListener("click", () => withButton($("#copyKey"), "复制中…", async () => {
-  try { await navigator.clipboard.writeText($("#newKeySecret").value); feedback("#copyFeedback", "密钥已复制，请保存到安全位置。"); }
-  catch { $("#newKeySecret").focus(); $("#newKeySecret").select(); feedback("#copyFeedback", "无法自动复制，请手动复制上方已选中的密钥。", true); }
+  if (await copyText($("#newKeySecret").value)) feedback("#copyFeedback", "密钥已复制，请保存到安全位置。");
+  else {
+    $("#newKeySecret").focus(); $("#newKeySecret").select();
+    feedback("#copyFeedback", "无法自动复制，请手动复制上方已选中的密钥。", true);
+  }
 }));
 async function toggleKey(button) {
   const key = state.keys.find((item) => item.id === button.dataset.id);
