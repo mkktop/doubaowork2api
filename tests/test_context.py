@@ -51,3 +51,25 @@ def test_output_reservation_is_capped_before_dispatch():
     bounded = apply_context_budget(request)
     assert bounded.gateway_context["reserved_output_tokens"] == 32768
     assert bounded.gateway_context["requested_output_tokens"] == 290000
+
+
+def test_breakdown_attributes_most_bytes_to_a_large_tool_declaration():
+    # A client declaring a hundred MCP tools spends the window on schemas
+    # before the user types anything; the metadata must show that.
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"tool_{index}",
+                "description": "d" * 2000,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for index in range(50)
+    ]
+    request = ChatCompletionRequest(messages=[{"role": "user", "content": "hi"}], tools=tools)
+    bounded = apply_context_budget(request)
+    breakdown = bounded.gateway_context["estimated_breakdown"]
+    assert breakdown["tools_declared"] == 50
+    assert breakdown["tools"] > 100000
+    assert breakdown["tools"] > breakdown["messages"] * 100
