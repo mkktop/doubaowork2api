@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import uuid
 from typing import Any, Literal
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .errors import GatewayError
 from .models import ChatMessage
+
+logger = logging.getLogger(__name__)
 
 
 class ToolBridgeRequestError(GatewayError):
@@ -308,20 +311,29 @@ def _normalize_tools(tools: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(tools):
         if not isinstance(item, dict):
             raise ToolBridgeRequestError(
-                f"tools[{index}] must be an object.", code="invalid_tools"
+                f"tools[{index}] must be an object, got {type(item).__name__}.",
+                code="invalid_tools",
             )
         try:
             tool = _ToolDefinition.model_validate(item)
         except ValidationError as exc:
+            details = exc.errors()
+            first = details[0] if details else {}
+            where = ".".join(str(part) for part in first.get("loc", ())) or "tool"
+            detail = f"{where}: {first.get('msg', 'invalid value')}"
+            hint = ""
+            if isinstance(item.get("function"), dict) and isinstance(item["function"].get("name"), str):
+                hint = f" (name={item['function']['name'][:80]!r})"
+            logger.warning("rejected tools[%d]%s: %s", index, hint, detail)
             raise ToolBridgeRequestError(
-                f"tools[{index}] is not a valid function tool.",
+                f"tools[{index}] is not a valid function tool{hint}: {detail}.",
                 code="invalid_tools",
             ) from exc
         try:
             _json(item)
         except (TypeError, ValueError, RecursionError) as exc:
             raise ToolBridgeRequestError(
-                f"tools[{index}] contains a non-JSON-safe value.",
+                f"tools[{index}] contains a non-JSON-safe value ({type(exc).__name__}).",
                 code="invalid_tools",
             ) from exc
         name = tool.function.name

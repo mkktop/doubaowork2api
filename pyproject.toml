@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doubaowork2api"
-version = "1.0.5"
+version = "1.0.6"
 description = "Direct, account-pooled OpenAI-compatible gateway for DoubaoWork"
 authors = [{name = "niyouqianma"}]
 readme = "README.md"

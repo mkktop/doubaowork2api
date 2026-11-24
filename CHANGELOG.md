@@ -1,5 +1,12 @@
 # 版本说明
 
+## v1.0.6 · 2026-11-24
+
+提升工具定义的兼容性与排错信息。
+
+- **`/v1/responses` 函数工具忽略未知字段**：客户端在 function tool 上新增的字段（如 `defer_loading`、厂商扩展）以前会触发 `400 invalid_tools`（"contains unsupported fields"），导致整轮失败。现在只记录一条 info 日志并忽略未知字段，已知字段的类型校验保持不变。
+- **工具校验错误更具体**：`/v1/chat/completions` 的工具校验失败时，错误信息会带出具体字段与原因（如 `function.name: String should have at most 64 characters`）以及工具名，并写 WARN 日志，便于定位是哪个工具不合法。
+
 ## v1.0.5 · 2026-11-24
 
 工具声明上限由 128 调整为 **256**（`tool_bridge.py` 的 `_MAX_TOOLS`），适配启用较多 MCP / 插件的客户端（如 ZCode）。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import time
 import uuid
@@ -14,6 +15,8 @@ from pydantic import ValidationError
 from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
 from .compatibility import IGNORED_RESPONSE_INCLUDES, without_client_hints
+
+logger = logging.getLogger(__name__)
 
 
 class ResponsesConversionError(GatewayError):
@@ -411,11 +414,12 @@ def _convert_tools(value: Any) -> list[dict[str, Any]] | None:
                 "unsupported_tool",
             )
         allowed = {"type", "name", "description", "parameters", "strict"}
-        if set(tool) - allowed:
-            _fail(
-                f"tools[{index}] contains unsupported fields.",
-                "invalid_tools",
-            )
+        extra = set(tool) - allowed
+        if extra:
+            # Clients evolve faster than this converter; unknown keys on a
+            # function tool are harmless, so ignore them instead of failing
+            # the whole turn.
+            logger.info("ignoring unknown fields on tools[%d]: %s", index, sorted(extra))
         name = _string(tool.get("name"), f"tools[{index}].name", "invalid_tools")
         if not _TOOL_NAME.fullmatch(name):
             _fail(

@@ -832,3 +832,35 @@ def test_compaction_item_shape_is_accepted_by_input_conversion() -> None:
         decode_compaction=decode,
     )
     assert request.messages == [ChatMessage(role="assistant", content="checkpoint")]
+
+
+def test_responses_function_tools_ignore_unknown_fields() -> None:
+    request = responses_to_chat(
+        {
+            "model": "m",
+            "input": "x",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "d",
+                    "parameters": {"type": "object"},
+                    "strict": False,
+                    "defer_loading": True,
+                    "x_vendor": {"hint": 1},
+                }
+            ],
+        },
+        "fallback-model",
+    )
+    assert request.tools == [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "d",
+                "parameters": {"type": "object"},
+                "strict": False,
+            },
+        }
+    ]
