@@ -62,7 +62,12 @@ def apply_context_budget(request: ChatCompletionRequest) -> ChatCompletionReques
     if estimated <= available:
         return request.model_copy(update={"gateway_context": metadata})
     if request.truncation != "auto":
-        raise ContextLengthError("Estimated context exceeds the verified model window. Use truncation='auto' or /v1/responses/compact.")
+        raise ContextLengthError(
+            "Estimated context exceeds the verified model window: "
+            f"{estimated} bytes estimated, {available} bytes available "
+            f"(window {window}, reserved output {output}, server reserve {reserve}). "
+            "Use truncation='auto' or /v1/responses/compact."
+        )
     systems, groups = conversation_groups(request.messages)
     dropped = 0
     while len(groups) > 1:
