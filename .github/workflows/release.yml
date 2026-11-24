@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = r"^## v" + re.escape(tag) + r"\b.*?(?=^## v|\Z)"
+          match = re.search(pattern, text, re.M | re.S)
+          notes = match.group(0).strip() if match else f"Release v{tag}"
+          pathlib.Path("release-notes.md").write_text(notes + "\n", encoding="utf-8")
+          print(notes[:400])
+          PY
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.whl \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
