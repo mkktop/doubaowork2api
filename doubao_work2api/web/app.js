@@ -1366,7 +1366,7 @@ async function startQR() {
     $('#qrImage').src = session.image;
     $('#qrImage').hidden = false;
     $('#qrStatus').textContent = '请扫码并在手机上确认。二维码约 60 秒自动刷新。';
-    state.qrTimer = setTimeout(() => pollQR(generation, epoch), 2400);
+    state.qrTimer = setTimeout(() => pollQR(generation, epoch), 5000);
   } catch (error) {
     if (generation === state.qrGeneration && epoch === state.sessionEpoch) $('#qrStatus').textContent = error.message;
   } finally {
@@ -1393,7 +1393,7 @@ async function pollQR(generation, epoch) {
     }
     $('#qrStatus').textContent = {waiting: '等待扫码…', scanned: '已扫码，请在手机上确认。', expired: '二维码已过期，请刷新。', canceled: '登录已取消，请刷新。'}[result.status] || '等待登录确认…';
     if (['expired', 'canceled'].includes(result.status)) return;
-    state.qrTimer = setTimeout(() => pollQR(generation, epoch), 2400);
+    state.qrTimer = setTimeout(() => pollQR(generation, epoch), 5000);
   } catch (error) {
     if (generation === state.qrGeneration && epoch === state.sessionEpoch) $('#qrStatus').textContent = error.message;
   }

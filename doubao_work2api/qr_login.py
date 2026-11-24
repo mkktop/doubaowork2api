@@ -115,6 +115,7 @@ class QRLogin:
     def __init__(self, pool, client_factory=None):
         self.pool = pool
         self.sessions: dict[str, QRSession] = {}
+        self.cooldown_until = 0.0
         self.client_factory = client_factory or (lambda: httpx.AsyncClient(
             http2=True, follow_redirects=False, timeout=25,
             headers={'User-Agent': USER_AGENT, 'Referer': 'https://www.doubao.com/',
@@ -149,7 +150,15 @@ class QRLogin:
             pass
         raise UpstreamError('官方登录响应格式已变化。', code='qr_upstream_error')
 
+    def _rate_limited(self):
+        remaining = self.cooldown_until - time.monotonic()
+        if remaining > 0:
+            raise UpstreamError(
+                "官方登录接口限流中，请约 %d 秒后再试（期间不要反复点扫码）。" % max(1, int(remaining)),
+                code="qr_rate_limited")
+
     async def start(self, owner):
+        self._rate_limited()
         for session_id, session in list(self.sessions.items()):
             if session.expires_at < time.time():
                 await self.cancel(session_id, session.owner)
@@ -210,6 +219,7 @@ class QRLogin:
             if time.monotonic() - session.last_poll < 2:
                 return session.public(session_id)
             session.last_poll = time.monotonic()
+            self._rate_limited()
             # 官方 passport 现在要求把 csrf cookie 回填到请求头，否则一律
             # 返回 error_code 2035「非法请求」，扫码确认后也永远拿不到状态。
             csrf = session.client.cookies.get('passport_csrf_token', '')
@@ -227,6 +237,8 @@ class QRLogin:
                 # 扫码后服务端短暂的「服务繁忙」，保持当前状态继续轮询
                 return session.public(session_id)
             if error_code != '0' and 'status' not in data:
+                if error_code == '7':
+                    self.cooldown_until = time.monotonic() + 180
                 raise UpstreamError(
                     '官方登录接口拒绝了本次查询（%s：%s），扫码登录暂时不可用，请改用浏览器登录或离线扫描。'
                     % (error_code, data.get('description') or '未知错误'),
